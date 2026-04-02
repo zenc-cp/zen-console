@@ -129,6 +129,9 @@ def handle_get(handler, parsed):
         return _handle_approval_pending(handler, parsed)
 
     if parsed.path == '/api/approval/inject_test':
+        # Loopback-only: used by automated tests; blocked from any remote client
+        if handler.client_address[0] != '127.0.0.1':
+            return j(handler, {'error': 'not found'}, status=404)
         return _handle_approval_inject(handler, parsed)
 
     # ── Cron API (GET) ──
@@ -335,10 +338,9 @@ def handle_post(handler, parsed):
 
 def _serve_static(handler, parsed):
     static_root = (Path(__file__).parent.parent / 'static').resolve()
-    # Strip the leading '/static/' prefix and resolve the full path
+    # Strip the leading '/static/' prefix, then resolve and sandbox
     rel = parsed.path[len('/static/'):]
     static_file = (static_root / rel).resolve()
-    # Sandbox check: resolved path must stay inside static_root
     try:
         static_file.relative_to(static_root)
     except ValueError:
@@ -494,6 +496,7 @@ def _handle_approval_pending(handler, parsed):
 
 
 def _handle_approval_inject(handler, parsed):
+    """Inject a fake pending approval -- loopback-only, used by automated tests."""
     qs = parse_qs(parsed.query)
     sid = qs.get('session_id', [''])[0]
     key = qs.get('pattern_key', ['test_pattern'])[0]
@@ -879,6 +882,8 @@ def _handle_skill_save(handler, body):
     if not skill_name or '/' in skill_name or '..' in skill_name:
         return bad(handler, 'Invalid skill name')
     category = body.get('category', '').strip()
+    if category and ('/' in category or '..' in category):
+        return bad(handler, 'Invalid category')
     from tools.skills_tool import SKILLS_DIR
     if category:
         skill_dir = SKILLS_DIR / category / skill_name
