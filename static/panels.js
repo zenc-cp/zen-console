@@ -477,6 +477,7 @@ function toggleWsDropdown(){
   const open=dd.classList.contains('open');
   if(open){closeWsDropdown();}
   else{
+    closeProfileDropdown(); // close profile dropdown if open
     loadWorkspaceList().then(data=>{
       renderWorkspaceDropdown(data.workspaces, S.session?S.session.workspace:'');
       dd.classList.add('open');
@@ -642,6 +643,7 @@ function toggleProfileDropdown() {
   const dd = $('profileDropdown');
   if (!dd) return;
   if (dd.classList.contains('open')) { closeProfileDropdown(); return; }
+  closeWsDropdown(); // close workspace dropdown if open
   api('/api/profiles').then(data => {
     renderProfileDropdown(data);
     dd.classList.add('open');

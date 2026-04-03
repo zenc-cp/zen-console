@@ -397,11 +397,19 @@ def handle_post(handler, parsed):
     if parsed.path == '/api/profile/create':
         name = body.get('name', '').strip()
         if not name: return bad(handler, 'name is required')
+        import re as _re
+        if not _re.match(r'^[a-z0-9][a-z0-9_-]{0,63}$', name):
+            return bad(handler, 'Invalid profile name: lowercase letters, numbers, hyphens, underscores only')
+        clone_from = body.get('clone_from')
+        if clone_from is not None:
+            clone_from = str(clone_from).strip()
+            if not _re.match(r'^[a-z0-9][a-z0-9_-]{0,63}$', clone_from):
+                return bad(handler, 'Invalid clone_from name')
         try:
             from api.profiles import create_profile_api
             result = create_profile_api(
                 name,
-                clone_from=body.get('clone_from'),
+                clone_from=clone_from,
                 clone_config=bool(body.get('clone_config', False)),
             )
             return j(handler, {'ok': True, 'profile': result})
@@ -417,6 +425,8 @@ def handle_post(handler, parsed):
             return j(handler, result)
         except (ValueError, FileNotFoundError) as e:
             return bad(handler, str(e))
+        except RuntimeError as e:
+            return bad(handler, str(e), 409)
 
     # ── Settings (POST) ──
     if parsed.path == '/api/settings':
