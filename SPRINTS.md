@@ -14,19 +14,27 @@
 
 ---
 
-## Where we are now (v0.21)
+## Where we are now (v0.36)
 
-**CLI parity: ~90% complete.** Core agent loop, all tools visible, workspace
-file ops with tree view, cron/skills/memory CRUD, session management, streaming,
-cancel, multi-provider models, custom endpoint discovery, slash commands,
-thinking/reasoning display, password auth -- all solid. Gaps are subagent
-visibility, toolset control, and code execution.
+**CLI parity: ~95% complete.** Core agent loop, all tools visible, workspace
+file ops with tree view and git detection, cron/skills/memory CRUD, session
+management, streaming with rAF throttle, cancel, multi-provider models, custom
+endpoint discovery, slash commands (help/clear/model/workspace/new/usage/theme/compact),
+thinking/reasoning display, password auth, multi-profile support with seamless
+switching, CLI session bridge (read and import from state.db), context
+auto-compaction handling, self-update checker. Remaining gaps: subagent
+session tree, toolset control per session, code execution cells.
 
-**Claude parity: ~70% complete.** Chat, streaming, file browser, session
-management, tool cards, syntax highlighting, model switching, projects,
-settings, Mermaid diagrams, mobile layout, breadcrumb workspace nav, slash
-commands, thinking display, auth -- all present. Gaps are artifacts, voice,
-TTS, sharing, mobile-optimized layout.
+**Claude parity: ~85% complete.** Chat, streaming, file browser, session
+management with projects and tags, tool cards with subagent delegation,
+syntax highlighting, model switching, Mermaid diagrams, mobile responsive
+layout (hamburger sidebar, bottom nav, files slide-over), breadcrumb
+workspace nav with tree view, slash commands, thinking/reasoning display,
+auth with signed cookies, 6 pluggable UI themes (dark/light/slate/solarized/
+monokai/nord), voice input (Web Speech API), collapsible date groups,
+context usage indicator, token/cost display, git branch badge, Docker
+support. Remaining gaps: artifacts (HTML/SVG preview), TTS playback,
+sharing/public URLs, code execution inline.
 
 ---
 
