@@ -1,10 +1,12 @@
 """
 Hermes Web UI -- SSE streaming engine and agent thread runner.
 Includes Sprint 10 cancel support via CANCEL_FLAGS.
+Includes hallucination guard to prevent fabricated tool output.
 """
 import json
 import os
 import queue
+import re
 import threading
 import time
 import traceback
@@ -28,6 +30,75 @@ from api.workspace import set_last_workspace
 # Everything else (attachments, timestamp, _ts, etc.) is display-only
 # metadata added by the webui and must be stripped before the API call.
 _API_SAFE_MSG_KEYS = {'role', 'content', 'tool_calls', 'tool_call_id', 'name', 'refusal'}
+
+# ── Hallucination guard: detect and strip fabricated tool output ──────────
+
+# Patterns that indicate the model is writing fake tool execution results
+# instead of actually calling tools. These should ONLY appear in real tool
+# result messages (role: "tool"), never in assistant text.
+_FAKE_OUTPUT_PATTERNS = [
+    # {"output": "...", "exit_code": N}
+    re.compile(r'\{\s*"output"\s*:\s*"[^"]*"\s*,\s*"exit_code"\s*:\s*\d+[^}]*\}'),
+    # {"output": "...", "stderr": "...", "exit_code": N}
+    re.compile(r'\{\s*"output"\s*:\s*"[^"]*"\s*,\s*"stderr"\s*:\s*"[^"]*"\s*,\s*"exit_code"\s*:\s*\d+[^}]*\}'),
+    # Executing:\n{...} or Executing:\n```
+    re.compile(r'Executing:\s*\n\s*[{`]'),
+    # Output:\n{"output": ...}
+    re.compile(r'(?:Output|Result):\s*\n\s*\{\s*"(?:output|result|exit_code)'),
+    # Bare fabricated command output blocks after "Running" or "Executing"
+    re.compile(r'(?:Running|Executing)\s+`[^`]+`[:\s]*\n```(?:json|bash|sh)?\s*\n\s*\{[^}]*"(?:output|exit_code)"'),
+]
+
+# Lighter pattern for streaming tokens — just check for the opening of fake JSON
+_FAKE_TOKEN_PATTERN = re.compile(
+    r'\{\s*"(?:output|exit_code|stderr)"\s*:'
+)
+
+
+def _contains_fake_tool_output(text: str) -> bool:
+    """Return True if text contains patterns that look like fabricated tool output."""
+    if not text:
+        return False
+    for pat in _FAKE_OUTPUT_PATTERNS:
+        if pat.search(text):
+            return True
+    return False
+
+
+def _strip_fake_tool_output(text: str) -> str:
+    """Remove fabricated tool output patterns from assistant text.
+
+    When a model writes text like:
+        Executing: {"output": "total 396\\ndrwxr-xr-x...", "exit_code": 0}
+    this replaces the fake JSON with a notice that the model should use
+    the actual tool instead.
+    """
+    if not text:
+        return text
+    cleaned = text
+    # Replace fake JSON output blocks
+    cleaned = re.sub(
+        r'\{\s*"output"\s*:\s*"[^"]*"\s*,\s*(?:"stderr"\s*:\s*"[^"]*"\s*,\s*)?'
+        r'"exit_code"\s*:\s*\d+[^}]*\}',
+        '[Fabricated output removed — use the terminal tool to execute commands]',
+        cleaned,
+    )
+    return cleaned
+
+
+# System prompt injection to prevent hallucinated tool output.
+# Appended as ephemeral_system_prompt so it's part of every API call
+# but not persisted to session transcripts.
+_ANTI_HALLUCINATION_PROMPT = """
+CRITICAL EXECUTION RULES — TOOL USE ONLY:
+- You MUST use the terminal tool to run ANY shell command. NEVER write command output yourself.
+- NEVER write {"output": ..., "exit_code": ...} in your response text. That JSON format comes ONLY from actual tool execution results.
+- NEVER fabricate, guess, or simulate command output. If you need to know the result of a command, call the terminal tool.
+- If a command fails, report the actual error from the tool result. Never fabricate success.
+- "Executing:" followed by JSON you wrote is NOT execution — it is hallucination. Use the terminal tool instead.
+- When asked to run a command (e.g., "run ls", "execute curl", "run echo"), you MUST call the terminal tool. Writing the expected output is not acceptable.
+- After calling a tool, wait for the real result before continuing. Do not predict or pre-write tool results.
+""".strip()
 
 
 def _sanitize_messages_for_api(messages):
@@ -112,9 +183,48 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
               os.environ['HERMES_HOME'] = _profile_home
 
           try:
+            # ── Hallucination-guarded token callback ──────────────
+            # Buffer streamed tokens to detect fake tool output mid-stream.
+            # When the model starts writing {"output": ..., we hold tokens
+            # until we can confirm it's real commentary or fake output.
+            _token_buf = []       # buffered token strings
+            _token_buf_len = 0    # total chars in buffer
+            _BUF_THRESHOLD = 200  # flush if buffer exceeds this without match
+
+            def _flush_token_buf():
+                """Flush buffered tokens to client, stripping fake output."""
+                nonlocal _token_buf, _token_buf_len
+                if not _token_buf:
+                    return
+                combined = ''.join(_token_buf)
+                _token_buf = []
+                _token_buf_len = 0
+                if _contains_fake_tool_output(combined):
+                    cleaned = _strip_fake_tool_output(combined)
+                    if cleaned.strip():
+                        put('token', {'text': cleaned})
+                    print('[webui] hallucination guard: stripped fake tool output from stream', flush=True)
+                else:
+                    put('token', {'text': combined})
+
             def on_token(text):
+                nonlocal _token_buf, _token_buf_len
                 if text is None:
-                    return  # end-of-stream sentinel
+                    _flush_token_buf()  # flush remaining buffer on end-of-stream
+                    return
+                # Check if this token or accumulated buffer looks like fake output
+                if _FAKE_TOKEN_PATTERN.search(text) or (_token_buf and _FAKE_TOKEN_PATTERN.search(''.join(_token_buf) + text)):
+                    _token_buf.append(text)
+                    _token_buf_len += len(text)
+                    # If buffer is large enough, we can decide
+                    if _token_buf_len >= _BUF_THRESHOLD:
+                        _flush_token_buf()
+                    return
+                if _token_buf:
+                    # We were buffering but this token doesn't continue the pattern
+                    _token_buf.append(text)
+                    _flush_token_buf()
+                    return
                 put('token', {'text': text})
 
             def on_tool(name, preview, args):
@@ -169,6 +279,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 session_id=session_id,
                 stream_delta_callback=on_token,
                 tool_progress_callback=on_tool,
+                ephemeral_system_prompt=_ANTI_HALLUCINATION_PROMPT,
             )
             # Prepend workspace context so the agent always knows which directory
             # to use for file operations, regardless of session age or AGENTS.md defaults.
@@ -191,7 +302,22 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 task_id=session_id,
                 persist_user_message=msg_text,
             )
-            s.messages = result.get('messages') or s.messages
+
+            # ── Post-run hallucination scrub ───────────────────────
+            # Scan assistant messages for any fabricated tool output
+            # that slipped past the streaming guard (e.g. from non-
+            # streaming providers or buffered responses).
+            _result_msgs = result.get('messages') or s.messages
+            _hallucination_count = 0
+            for _m in _result_msgs:
+                if _m.get('role') == 'assistant' and isinstance(_m.get('content'), str):
+                    if _contains_fake_tool_output(_m['content']):
+                        _m['content'] = _strip_fake_tool_output(_m['content'])
+                        _hallucination_count += 1
+            if _hallucination_count:
+                print(f'[webui] hallucination guard: scrubbed {_hallucination_count} assistant message(s) with fake tool output', flush=True)
+
+            s.messages = _result_msgs
             # Stamp 'timestamp' on any messages that don't have one yet
             _now = time.time()
             for _m in s.messages:
