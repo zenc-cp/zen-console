@@ -78,6 +78,27 @@ CRITICAL EXECUTION RULES — TOOL USE ONLY:
 """.strip()
 
 
+# Context window guard
+_MAX_HISTORY_CHARS = 400_000
+
+def _trim_history(messages):
+    if not messages:
+        return messages
+    total = sum(len(str(m.get("content", ""))) for m in messages)
+    if total <= _MAX_HISTORY_CHARS:
+        return messages
+    system_msgs = [m for m in messages if m.get("role") == "system"]
+    other_msgs = [m for m in messages if m.get("role") != "system"]
+    while len(other_msgs) > 2:
+        total = sum(len(str(m.get("content", ""))) for m in system_msgs + other_msgs)
+        if total <= _MAX_HISTORY_CHARS:
+            break
+        other_msgs = other_msgs[2:]
+    trimmed = system_msgs + other_msgs
+    print(f"[webui] context trim: {len(messages)} to {len(trimmed)} messages", flush=True)
+    return trimmed
+
+
 def _sanitize_messages_for_api(messages):
     """Return a deep copy of messages with only API-safe fields.
 
@@ -267,7 +288,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             result = agent.run_conversation(
                 user_message=workspace_ctx + msg_text,
                 system_message=workspace_system_msg,
-                conversation_history=_sanitize_messages_for_api(s.messages),
+                conversation_history=_trim_history(_sanitize_messages_for_api(s.messages)),
                 task_id=session_id,
                 persist_user_message=msg_text,
             )
