@@ -270,7 +270,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 conversation_history=_sanitize_messages_for_api(s.messages),
                 task_id=session_id,
                 persist_user_message=msg_text,
-                ephemeral_system_prompt=_ANTI_HALLUCINATION_PROMPT,
             )
             # ── Post-run hallucination scrub ───────────────────────
             _result_msgs = result.get('messages') or s.messages
