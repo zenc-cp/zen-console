@@ -296,34 +296,15 @@ _PROVIDER_DISPLAY = {
 
 # Well-known models per provider (used to populate dropdown for direct API providers)
 _PROVIDER_MODELS = {
-    'anthropic': [
-        {'id': 'claude-opus-4.6',    'label': 'Claude Opus 4.6'},
-        {'id': 'claude-sonnet-4.6',  'label': 'Claude Sonnet 4.6'},
-        {'id': 'claude-sonnet-4-5',  'label': 'Claude Sonnet 4.5'},
-        {'id': 'claude-haiku-3-5',   'label': 'Claude Haiku 3.5'},
-    ],
-    'openai': [
-        {'id': 'gpt-5.4-mini', 'label': 'GPT-5.4 Mini'},
-        {'id': 'gpt-4o',       'label': 'GPT-4o'},
-        {'id': 'o3',           'label': 'o3'},
-        {'id': 'o4-mini',      'label': 'o4-mini'},
-    ],
-    'openai-codex': [
-        {'id': 'codex-mini-latest', 'label': 'Codex Mini'},
-    ],
-    'google': [
-        {'id': 'gemini-2.5-pro', 'label': 'Gemini 2.5 Pro'},
-    ],
+    'anthropic': [],
+    'openai': [],
+    'openai-codex': [],
+    'google': [],
     'deepseek': [
         {'id': 'deepseek-chat-v3-0324', 'label': 'DeepSeek V3'},
         {'id': 'deepseek-reasoner',     'label': 'DeepSeek Reasoner'},
     ],
-    'nous': [
-        {'id': 'claude-opus-4.6',    'label': 'Claude Opus 4.6 (via Nous)'},
-        {'id': 'claude-sonnet-4.6',  'label': 'Claude Sonnet 4.6 (via Nous)'},
-        {'id': 'gpt-5.4-mini',      'label': 'GPT-5.4 Mini (via Nous)'},
-        {'id': 'gemini-2.5-pro',    'label': 'Gemini 2.5 Pro (via Nous)'},
-    ],
+    'nous': [],
     'zai': [
         {'id': 'glm-5.1',            'label': 'GLM-5.1'},
         {'id': 'glm-5',              'label': 'GLM-5'},
