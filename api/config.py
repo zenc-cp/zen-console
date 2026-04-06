@@ -272,16 +272,15 @@ CLI_TOOLSETS = get_config().get('platform_toolsets', {}).get('cli', _DEFAULT_TOO
 
 # Hardcoded fallback models (used when no config.yaml or agent is available)
 _FALLBACK_MODELS = [
-    {'provider': 'OpenAI',    'id': 'openai/gpt-5.4-mini',              'label': 'GPT-5.4 Mini'},
-    {'provider': 'OpenAI',    'id': 'openai/gpt-4o',                    'label': 'GPT-4o'},
-    {'provider': 'OpenAI',    'id': 'openai/o3',                        'label': 'o3'},
-    {'provider': 'OpenAI',    'id': 'openai/o4-mini',                   'label': 'o4-mini'},
-    {'provider': 'Anthropic', 'id': 'anthropic/claude-sonnet-4.6',      'label': 'Claude Sonnet 4.6'},
-    {'provider': 'Anthropic', 'id': 'anthropic/claude-sonnet-4-5',      'label': 'Claude Sonnet 4.5'},
-    {'provider': 'Anthropic', 'id': 'anthropic/claude-haiku-3-5',       'label': 'Claude Haiku 3.5'},
-    {'provider': 'Other',     'id': 'google/gemini-2.5-pro',            'label': 'Gemini 2.5 Pro'},
-    {'provider': 'Other',     'id': 'deepseek/deepseek-chat-v3-0324',   'label': 'DeepSeek V3'},
-    {'provider': 'Other',     'id': 'meta-llama/llama-4-scout',         'label': 'Llama 4 Scout'},
+    {"provider": "MiniMax",  "id": "minimax/minimax-m2.7",             "label": "MiniMax M2.7"},
+    {"provider": "DeepSeek", "id": "deepseek/deepseek-chat-v3-0324",   "label": "DeepSeek V3"},
+    {"provider": "DeepSeek", "id": "deepseek/deepseek-r1",             "label": "DeepSeek R1"},
+    {"provider": "Meta",     "id": "meta-llama/llama-4-maverick",      "label": "Llama 4 Maverick"},
+    {"provider": "Qwen",     "id": "qwen/qwen3-235b-a22b",             "label": "Qwen3 235B"},
+    {"provider": "xAI",      "id": "x-ai/grok-4.1-fast",              "label": "Grok 4.1 Fast"},
+    {"provider": "xAI",      "id": "x-ai/grok-3-mini-beta",           "label": "Grok 3 Mini"},
+    {"provider": "xAI",      "id": "x-ai/grok-4.20",                  "label": "Grok 4.20"},
+    {"provider": "Xiaomi",   "id": "xiaomi/mimo-v2-pro",               "label": "MiMo V2 Pro"},
 ]
 
 # Provider display names for known Hermes provider IDs
