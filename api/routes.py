@@ -617,6 +617,22 @@ def handle_post(handler, parsed):
         handler.wfile.write(json.dumps({'ok': True}).encode())
         return True
 
+    if parsed.path == '/api/vision/describe':
+        body = read_body(handler)
+        data = json.loads(body or '{}')
+        image = data.get('image', '')
+        file_id = data.get('file_id', '')
+        prompt = data.get('prompt', 'Describe the image.')
+        from api.vision import describe_image, upload_and_describe
+        if file_id:
+            result = describe_image(image_path_or_url='', prompt=prompt, file_id=file_id)
+        elif image.startswith('http') or not image.startswith('/'):
+            result = describe_image(image_path_or_url=image, prompt=prompt)
+        else:
+            # Local workspace file — upload first for better reliability
+            result = upload_and_describe(local_path=image, prompt=prompt)
+        return j(handler, result)
+
     return False  # 404
 
 

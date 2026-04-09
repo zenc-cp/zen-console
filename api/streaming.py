@@ -18,6 +18,10 @@ from api.config import (
     resolve_model_provider,
 )
 
+# Thinking/response stream separator (MiniMax M2.7 extended thinking)
+_THINKING_OPEN  = "<thinking>"
+_THINKING_CLOSE = "</thinking>"
+
 # Lazy import to avoid circular deps -- hermes-agent is on sys.path via api/config.py
 try:
     from run_agent import AIAgent
@@ -202,11 +206,9 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 else:
                     put('token', {'text': combined})
 
-            def on_token(text):
+            # _route_token: hallucination-guard logic extracted for use by ThinkingRouter
+            def _route_token(text):
                 nonlocal _token_buf, _token_buf_len
-                if text is None:
-                    _flush_token_buf()
-                    return
                 if _FAKE_TOKEN_PATTERN.search(text) or (_token_buf and _FAKE_TOKEN_PATTERN.search(''.join(_token_buf) + text)):
                     _token_buf.append(text)
                     _token_buf_len += len(text)
@@ -218,6 +220,21 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     _flush_token_buf()
                     return
                 put('token', {'text': text})
+
+            # Wire ThinkingRouter: thinking tokens → SSE 'thinking' event;
+            # normal tokens → existing hallucination-guard path.
+            from conductor.lib.thinking_router import ThinkingRouter as _TR
+            _thinking_router = _TR(
+                on_token=_route_token,
+                on_thinking=lambda t: put('thinking', {'text': t}),
+            )
+
+            def on_token(text):
+                if text is None:
+                    _thinking_router.flush()
+                    _flush_token_buf()
+                    return
+                _thinking_router.feed(text)
 
             def on_tool(name, preview, args):
                 args_snap = {}
