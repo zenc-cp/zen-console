@@ -1,136 +1,174 @@
-"""api/vision.py — Image analysis via mmx vision describe.
+"""api/vision.py — Image analysis via OpenRouter vision models.
 
 Called from routes.py POST /api/vision/describe.
 Allows Hermes users to drop images into workspace and ask about them.
+
+Backend: qwen/qwen3-vl-32b-instruct via OpenRouter (cheap, capable, no mmx required).
+Fallback: z-ai/glm-5v-turbo (already in ZenOps model stack).
+
+No mmx CLI required. Uses OPENROUTER_API_KEY from environment.
 """
 from __future__ import annotations
 
+import base64
 import json
-import shutil
-import subprocess
+import os
+import urllib.request
+import urllib.error
+from pathlib import Path
+
+# Vision model priority — all available on OpenRouter, no Anthropic/OpenAI/Google
+VISION_MODELS = [
+    "qwen/qwen3-vl-32b-instruct",   # cheapest capable vision, $0.10/M
+    "z-ai/glm-5v-turbo",            # fallback — already in ZenOps stack
+    "google/gemma-4-31b-it:free",   # free fallback (multimodal)
+]
+
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
 
-def mmx_available() -> bool:
-    """Return True if the ``mmx`` binary is on PATH and exits cleanly."""
-    if shutil.which("mmx") is None:
-        return False
-    try:
-        result = subprocess.run(
-            ["mmx", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+def _api_key() -> str | None:
+    return os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENROUTER_KEY")
+
+
+def _image_to_data_url(path_or_url: str) -> str:
+    """Convert local path or URL to base64 data URL for OpenRouter vision API."""
+    if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
+        return path_or_url  # pass URL directly — OpenRouter accepts it
+
+    # Local file — encode as base64 data URL
+    p = Path(path_or_url)
+    if not p.exists():
+        raise FileNotFoundError(f"Image not found: {path_or_url}")
+
+    suffix = p.suffix.lower().lstrip(".")
+    mime = {
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "gif": "image/gif",
+        "webp": "image/webp",
+    }.get(suffix, "image/jpeg")
+
+    data = base64.b64encode(p.read_bytes()).decode()
+    return f"data:{mime};base64,{data}"
 
 
 def describe_image(
     image_path_or_url: str,
-    prompt: str = "Describe the image.",
+    prompt: str = "Describe the image in detail.",
     file_id: str = None,
+    model: str = None,
 ) -> dict:
-    """Describe an image using ``mmx vision describe``.
+    """Describe an image using OpenRouter vision model.
 
     Args:
-        image_path_or_url: Local path or HTTP URL to the image.
-            Ignored if *file_id* is provided.
+        image_path_or_url: Local file path or HTTP/S URL to the image.
         prompt: Instruction sent to the vision model.
-        file_id: If provided, uses ``--file-id`` instead of ``--image``.
+        file_id: Unused (kept for API compatibility — mmx file_id not applicable here).
+        model: Override vision model (default: qwen/qwen3-vl-32b-instruct).
 
     Returns:
-        ``{"content": "...", "source": "mmx", "ok": True}`` on success.
-        ``{"content": "", "error": "...", "ok": False}`` on failure.
+        {"content": "...", "source": "openrouter", "model": "...", "ok": True} on success.
+        {"content": "", "error": "...", "ok": False} on failure.
     """
-    if not mmx_available():
-        return {"content": "", "error": "mmx not available", "ok": False}
+    api_key = _api_key()
+    if not api_key:
+        return {"content": "", "error": "OPENROUTER_API_KEY not set", "ok": False}
+
+    if not image_path_or_url and not file_id:
+        return {"content": "", "error": "No image provided", "ok": False}
+
+    # file_id not supported without mmx — return clear error
+    if file_id and not image_path_or_url:
+        return {
+            "content": "",
+            "error": "file_id mode requires mmx (not available). Provide image path or URL instead.",
+            "ok": False,
+        }
+
+    selected_model = model or VISION_MODELS[0]
 
     try:
-        cmd = ["mmx", "vision", "describe", "--prompt", prompt, "--quiet"]
-        if file_id:
-            cmd += ["--file-id", file_id]
-        else:
-            cmd += ["--image", image_path_or_url]
+        image_ref = _image_to_data_url(image_path_or_url)
+    except FileNotFoundError as e:
+        return {"content": "", "error": str(e), "ok": False}
+    except Exception as e:
+        return {"content": "", "error": f"Image encoding error: {e}", "ok": False}
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+    payload = {
+        "model": selected_model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": image_ref},
+                    },
+                    {
+                        "type": "text",
+                        "text": prompt,
+                    },
+                ],
+            }
+        ],
+        "max_tokens": 1024,
+    }
 
-        if result.returncode != 0:
-            stderr = (result.stderr or result.stdout or "").strip()
-            return {"content": "", "error": f"mmx exited {result.returncode}: {stderr}", "ok": False}
+    req = urllib.request.Request(
+        f"{OPENROUTER_BASE}/chat/completions",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://z3nops.com",
+            "X-Title": "ZenOps Hermes",
+        },
+        method="POST",
+    )
 
-        stdout = result.stdout.strip()
-        # mmx may return JSON or plain text
+    # Try primary model, fall back on error
+    models_to_try = [selected_model] + [m for m in VISION_MODELS if m != selected_model]
+
+    for attempt_model in models_to_try:
+        payload["model"] = attempt_model
+        req.data = json.dumps(payload).encode()
         try:
-            data = json.loads(stdout)
-            content = (
-                data.get("description")
-                or data.get("content")
-                or data.get("text")
-                or str(data)
-            )
-        except (json.JSONDecodeError, AttributeError):
-            content = stdout
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                body = json.loads(resp.read())
+                content = body["choices"][0]["message"]["content"]
+                return {
+                    "content": content,
+                    "source": "openrouter",
+                    "model": attempt_model,
+                    "ok": True,
+                }
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode(errors="replace")
+            # Try next model on 4xx (model may not support vision)
+            if e.code in (400, 404, 422):
+                continue
+            return {"content": "", "error": f"HTTP {e.code}: {err_body[:200]}", "ok": False}
+        except urllib.error.URLError as e:
+            return {"content": "", "error": f"Network error: {e.reason}", "ok": False}
+        except (KeyError, IndexError, json.JSONDecodeError) as e:
+            return {"content": "", "error": f"Response parse error: {e}", "ok": False}
+        except Exception as e:
+            return {"content": "", "error": str(e), "ok": False}
 
-        return {"content": content, "source": "mmx", "ok": True}
-
-    except subprocess.TimeoutExpired:
-        return {"content": "", "error": "mmx vision describe timed out after 30s", "ok": False}
-    except Exception as exc:
-        return {"content": "", "error": str(exc), "ok": False}
+    return {"content": "", "error": "All vision models failed", "ok": False}
 
 
-def upload_and_describe(local_path: str, prompt: str = "Describe the image.") -> dict:
-    """Upload a local file then describe it via its MiniMax file_id.
+def upload_and_describe(local_path: str, prompt: str = "Describe the image in detail.") -> dict:
+    """Describe a local image file directly (no upload step needed with OpenRouter).
 
-    First calls ``mmx file upload --file {path} --purpose vision --quiet``
-    to obtain a *file_id*, then calls :func:`describe_image` with that id.
-
-    Args:
-        local_path: Absolute or relative path to the local image file.
-        prompt: Instruction sent to the vision model.
-
-    Returns:
-        Same shape as :func:`describe_image`.
+    Kept for API compatibility with old mmx-based implementation.
+    OpenRouter accepts base64 inline — no separate upload required.
     """
-    if not mmx_available():
-        return {"content": "", "error": "mmx not available", "ok": False}
+    return describe_image(image_path_or_url=local_path, prompt=prompt)
 
-    try:
-        upload_result = subprocess.run(
-            ["mmx", "file", "upload", "--file", local_path, "--purpose", "vision", "--quiet"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
 
-        if upload_result.returncode != 0:
-            stderr = (upload_result.stderr or upload_result.stdout or "").strip()
-            return {"content": "", "error": f"mmx file upload failed: {stderr}", "ok": False}
-
-        stdout = upload_result.stdout.strip()
-        file_id = None
-        try:
-            data = json.loads(stdout)
-            file_id = (
-                data.get("file_id")
-                or data.get("fileId")
-                or data.get("id")
-            )
-        except (json.JSONDecodeError, AttributeError):
-            file_id = stdout.strip()
-
-        if not file_id:
-            return {"content": "", "error": "mmx file upload returned no file_id", "ok": False}
-
-        return describe_image(image_path_or_url="", prompt=prompt, file_id=str(file_id))
-
-    except subprocess.TimeoutExpired:
-        return {"content": "", "error": "mmx file upload timed out", "ok": False}
-    except Exception as exc:
-        return {"content": "", "error": str(exc), "ok": False}
+def available() -> bool:
+    """Return True if vision API is available (OPENROUTER_API_KEY set)."""
+    return bool(_api_key())
