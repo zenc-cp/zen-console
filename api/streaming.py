@@ -7,6 +7,7 @@ import json
 import os
 import queue
 import re
+import sys
 import threading
 import time
 import traceback
@@ -295,6 +296,27 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 "write_file, read_file, search_files, terminal workdir, and patch. "
                 "Never fall back to a hardcoded path when this tag is present."
             )
+
+            # ── Tier 1 SessionStart: inject knowledge index ───────────────
+            # Read ~/claw/memory/knowledge/index.md (if it exists) and prepend
+            # its contents to workspace_system_msg so Hermes starts each session
+            # with accumulated institutional knowledge.
+            try:
+                _mem_index = Path(_profile_home or str(Path.home() / "claw")) / "memory" / "knowledge" / "index.md"
+                if _mem_index.exists():
+                    _index_text = _mem_index.read_text(encoding="utf-8", errors="replace")
+                    # Cap at 20K chars to avoid prompt bloat
+                    if len(_index_text) > 20000:
+                        _index_text = _index_text[:20000] + "\n[...index truncated at 20K chars...]\n"
+                    workspace_system_msg = (
+                        "## ZenOps Knowledge Base (SessionStart)\n"
+                        + _index_text
+                        + "\n---\n"
+                        + workspace_system_msg
+                    )
+                    print(f"[webui] memory: injected index.md ({len(_index_text)} chars)", flush=True)
+            except Exception as _mem_err:
+                print(f"[webui] memory: index injection skipped ({_mem_err})", flush=True)
             result = agent.run_conversation(
                 user_message=workspace_ctx + msg_text,
                 system_message=workspace_system_msg,
@@ -388,6 +410,31 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             s.save()
             usage = {'input_tokens': input_tokens, 'output_tokens': output_tokens, 'estimated_cost': estimated_cost}
             put('done', {'session': s.compact() | {'messages': s.messages, 'tool_calls': tool_calls}, 'usage': usage})
+
+            # ── Tier 1 SessionEnd: spawn flush.py detached ────────────────
+            # Persist session memory to ~/claw/memory/daily/YYYY-MM-DD.md
+            # without blocking the SSE response.
+            try:
+                import subprocess as _sp
+                _flush_script = Path(__file__).parent.parent / "scripts" / "flush.py"
+                # Fallback: check common install locations
+                if not _flush_script.exists():
+                    _flush_script = Path(_profile_home or str(Path.home() / "claw")) / "scripts" / "flush.py"
+                if _flush_script.exists():
+                    _flush_env = os.environ.copy()
+                    _flush_env["HERMES_HOME"] = _profile_home or str(Path.home() / "claw")
+                    _sp.Popen(
+                        [sys.executable, str(_flush_script), session_id],
+                        env=_flush_env,
+                        stdout=open(os.devnull, "w"),
+                        stderr=open(os.devnull, "w"),
+                        start_new_session=True,
+                    )
+                    print(f"[webui] memory: flush.py spawned for session {session_id[:12]}", flush=True)
+                else:
+                    print(f"[webui] memory: flush.py not found at {_flush_script}", flush=True)
+            except Exception as _flush_err:
+                print(f"[webui] memory: SessionEnd flush error ({_flush_err})", flush=True)
           finally:
             if old_cwd is None: os.environ.pop('TERMINAL_CWD', None)
             else: os.environ['TERMINAL_CWD'] = old_cwd
