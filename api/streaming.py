@@ -223,7 +223,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 
             # Wire ThinkingRouter: thinking tokens → SSE 'thinking' event;
             # normal tokens → existing hallucination-guard path.
-            from conductor.lib.thinking_router import ThinkingRouter as _TR
+            from api.thinking_router import ThinkingRouter as _TR
             _thinking_router = _TR(
                 on_token=_route_token,
                 on_thinking=lambda t: put('thinking', {'text': t}),
