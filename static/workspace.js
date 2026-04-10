@@ -1,5 +1,5 @@
 async function api(path,opts={}){
-  const url=new URL(path,location.origin);
+  const _base=location.origin+(location.pathname.match(/^\/[^\/]+/)||[''])[0]; const url=new URL(path,_base);
   const res=await fetch(url.href,{credentials:'include',headers:{'Content-Type':'application/json'},...opts});
   if(!res.ok){
     const text=await res.text();

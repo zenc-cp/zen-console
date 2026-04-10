@@ -43,7 +43,7 @@ async function populateModelDropdown(){
   const sel=$('modelSelect');
   if(!sel) return;
   try{
-    const data=await fetch(new URL('/api/models',location.origin).href,{credentials:'include'}).then(r=>r.json());
+    const data=await fetch(new URL('/console/api/models',location.origin).href,{credentials:'include'}).then(r=>r.json());
     if(!data.groups||!data.groups.length) return; // keep HTML defaults
     // Clear existing options
     sel.innerHTML='';
@@ -1017,7 +1017,7 @@ async function uploadPendingFiles(){
     const f=S.pendingFiles[i];const fd=new FormData();
     fd.append('session_id',S.session.session_id);fd.append('file',f,f.name);
     try{
-      const res=await fetch(new URL('/api/upload',location.origin).href,{method:'POST',credentials:'include',body:fd});
+      const res=await fetch(new URL('/console/api/upload',location.origin).href,{method:'POST',credentials:'include',body:fd});
       if(!res.ok){const err=await res.text();throw new Error(err);}
       const data=await res.json();
       if(data.error)throw new Error(data.error);
