@@ -272,16 +272,21 @@ CLI_TOOLSETS = get_config().get('platform_toolsets', {}).get('cli', _DEFAULT_TOO
 
 # Hardcoded fallback models (used when no config.yaml or agent is available)
 # Blocked providers: Anthropic, OpenAI, Google, DeepSeek (user policy)
+# Ordered: cheap daily drivers → mid-range → premium
 _FALLBACK_MODELS = [
-    {"provider": "MiniMax",  "id": "minimax/minimax-m2.7",             "label": "MiniMax M2.7"},
-    {"provider": "Meta",     "id": "meta-llama/llama-4-maverick",      "label": "Llama 4 Maverick"},
-    {"provider": "Qwen",     "id": "qwen/qwen3-235b-a22b",             "label": "Qwen3 235B"},
-    {"provider": "xAI",      "id": "x-ai/grok-4.1-fast",              "label": "Grok 4.1 Fast"},
-    {"provider": "xAI",      "id": "x-ai/grok-3-mini-beta",           "label": "Grok 3 Mini"},
-    {"provider": "xAI",      "id": "x-ai/grok-4.20",                  "label": "Grok 4.20"},
-    {"provider": "Xiaomi",   "id": "xiaomi/mimo-v2-pro",               "label": "MiMo V2 Pro"},
-    {"provider": "Xiaomi",   "id": "xiaomi/mimo-v2-flash",             "label": "MiMo V2 Flash"},
-    {"provider": "Z.AI",     "id": "z-ai/glm-4.7-flash",              "label": "GLM 4.7 Flash"},
+    {"provider": "MiniMax",  "id": "minimax/minimax-m2.7",                    "label": "MiniMax M2.7"},
+    {"provider": "Nvidia",   "id": "nvidia/nemotron-3-super-120b-a12b",       "label": "Nemotron Super 120B (Free)"},
+    {"provider": "Qwen",     "id": "qwen/qwen3-235b-a22b-2507",               "label": "Qwen3 235B (Jul)"},
+    {"provider": "Z.AI",     "id": "z-ai/glm-4.7-flash",                     "label": "GLM 4.7 Flash"},
+    {"provider": "Mistral",  "id": "mistralai/mistral-small-3.1-24b-instruct","label": "Mistral Small 3.1"},
+    {"provider": "Nvidia",   "id": "nvidia/llama-3.3-nemotron-super-49b-v1.5","label": "Nemotron 49B"},
+    {"provider": "Meta",     "id": "meta-llama/llama-4-maverick",             "label": "Llama 4 Maverick"},
+    {"provider": "xAI",      "id": "x-ai/grok-4.1-fast",                     "label": "Grok 4.1 Fast"},
+    {"provider": "xAI",      "id": "x-ai/grok-3-mini-beta",                  "label": "Grok 3 Mini"},
+    {"provider": "Xiaomi",   "id": "xiaomi/mimo-v2-flash",                    "label": "MiMo V2 Flash"},
+    {"provider": "Mistral",  "id": "mistralai/codestral-2508",                "label": "Codestral (Code)"},
+    {"provider": "Z.AI",     "id": "z-ai/glm-5",                             "label": "GLM-5"},
+    {"provider": "xAI",      "id": "x-ai/grok-4.20",                         "label": "Grok 4.20"},
 ]
 
 # Provider display names for known Hermes provider IDs
