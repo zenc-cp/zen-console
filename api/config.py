@@ -287,7 +287,7 @@ _FALLBACK_MODELS = [
     {"provider": "xAI",      "id": "x-ai/grok-3-mini-beta",                  "label": "Grok 3 Mini"},
     {"provider": "Xiaomi",   "id": "xiaomi/mimo-v2-flash",                    "label": "MiMo V2 Flash"},
     {"provider": "Mistral",  "id": "mistralai/codestral-2508",                "label": "Codestral (Code)"},
-    {"provider": "Z.AI",     "id": "z-ai/glm-5",                             "label": "GLM-5"},
+    {"provider": "Z.AI",     "id": "z-ai/glm-5.1",                           "label": "GLM-5.1"},
     {"provider": "xAI",      "id": "x-ai/grok-4.20",                         "label": "Grok 4.20"},
 ]
 
