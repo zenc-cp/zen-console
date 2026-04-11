@@ -279,6 +279,8 @@ _FALLBACK_MODELS = [
     {"provider": "Qwen",     "id": "qwen/qwen3-235b-a22b-2507",               "label": "Qwen3 235B (Jul)"},
     {"provider": "Z.AI",     "id": "z-ai/glm-4.7-flash",                     "label": "GLM 4.7 Flash"},
     {"provider": "Mistral",  "id": "mistralai/mistral-small-3.1-24b-instruct","label": "Mistral Small 3.1"},
+    {"provider": "Google",   "id": "google/gemma-4-31b-it",                   "label": "Gemma 4 31B (Vision)"},
+    {"provider": "Google",   "id": "google/gemma-4-26b-a4b-it",               "label": "Gemma 4 26B MoE"},
     {"provider": "Nvidia",   "id": "nvidia/llama-3.3-nemotron-super-49b-v1.5","label": "Nemotron 49B"},
     {"provider": "Meta",     "id": "meta-llama/llama-4-maverick",             "label": "Llama 4 Maverick"},
     {"provider": "xAI",      "id": "x-ai/grok-4.1-fast",                     "label": "Grok 4.1 Fast"},

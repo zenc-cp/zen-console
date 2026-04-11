@@ -17,11 +17,11 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-# Vision model priority — all available on OpenRouter, no Anthropic/OpenAI/Google
+# Vision model priority — all via OpenRouter (paid variants bypass Google regional blocks)
 VISION_MODELS = [
-    "qwen/qwen3-vl-32b-instruct",   # cheapest capable vision, $0.10/M
+    "google/gemma-4-31b-it",         # $0.14/M, 262K ctx, multimodal, routes via Parasail
+    "qwen/qwen3-vl-32b-instruct",   # $0.10/M fallback
     "z-ai/glm-5v-turbo",            # fallback — already in ZenOps stack
-    "google/gemma-4-31b-it:free",   # free fallback (multimodal)
 ]
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
@@ -172,3 +172,6 @@ def upload_and_describe(local_path: str, prompt: str = "Describe the image in de
 def available() -> bool:
     """Return True if vision API is available (OPENROUTER_API_KEY set)."""
     return bool(_api_key())
+
+# Alias for backward compatibility with test mocks
+mmx_available = available
