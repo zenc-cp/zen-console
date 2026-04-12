@@ -69,6 +69,14 @@ def main():
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     DEFAULT_WORKSPACE.mkdir(parents=True, exist_ok=True)
+
+    # Start background task worker
+    try:
+        from api.task_integration import init_task_system
+        init_task_system()
+    except Exception as e:
+        print(f'  [tasks] Warning: background task system failed to start: {e}', flush=True)
+
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f'  Hermes Web UI listening on http://{HOST}:{PORT}', flush=True)
     if HOST == '127.0.0.1':

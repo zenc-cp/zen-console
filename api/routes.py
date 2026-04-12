@@ -300,6 +300,12 @@ def handle_get(handler, parsed):
         from api.profiles import get_active_profile_name, get_active_hermes_home
         return j(handler, {'name': get_active_profile_name(), 'path': str(get_active_hermes_home())})
 
+    # ── Background task routes (GET) ──
+    from api.task_routes import register_task_routes_get
+    result = register_task_routes_get(parsed.path, handler, parsed)
+    if result is not None:
+        return result
+
     return False  # 404
 
 
@@ -632,6 +638,12 @@ def handle_post(handler, parsed):
             # Local workspace file — upload first for better reliability
             result = upload_and_describe(local_path=image, prompt=prompt)
         return j(handler, result)
+
+    # ── Background task routes (POST) ──
+    from api.task_routes import register_task_routes_post
+    result = register_task_routes_post(parsed.path, handler, body)
+    if result is not None:
+        return result
 
     return False  # 404
 
