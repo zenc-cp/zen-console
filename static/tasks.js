@@ -230,7 +230,7 @@ function updateTaskCard(task) {
 function startPolling(taskId) {
     _pollingTasks.add(taskId);
     if (!_pollTimer) {
-        _pollTimer = setInterval(pollTasks, 3000);
+        _pollTimer = setInterval(pollTasks, 6000);
     }
 }
 
@@ -267,7 +267,10 @@ async function pollTasks() {
     }
 }
 
+var _refreshDebounce = null;
 async function refreshTaskList() {
+    if (_refreshDebounce) return;
+    _refreshDebounce = setTimeout(function(){ _refreshDebounce = null; }, 2000);
     try {
         var res = await api('/api/tasks?limit=20');
         var el = document.getElementById('taskListContent');

@@ -39,9 +39,14 @@ class Handler(BaseHTTPRequestHandler):
             result = handle_get(self, parsed)
             if result is False:
                 return j(self, {'error': 'not found'}, status=404)
+        except (BrokenPipeError, ConnectionResetError):
+            return  # client disconnected — silently ignore
         except Exception as e:
             print(f'[webui] ERROR {self.command} {self.path}\n' + traceback.format_exc(), flush=True)
-            return j(self, {'error': 'Internal server error'}, status=500)
+            try:
+                return j(self, {'error': 'Internal server error'}, status=500)
+            except (BrokenPipeError, ConnectionResetError):
+                return  # client already gone
 
     def do_POST(self):
         self._req_t0 = time.time()
@@ -51,9 +56,14 @@ class Handler(BaseHTTPRequestHandler):
             result = handle_post(self, parsed)
             if result is False:
                 return j(self, {'error': 'not found'}, status=404)
+        except (BrokenPipeError, ConnectionResetError):
+            return  # client disconnected — silently ignore
         except Exception as e:
             print(f'[webui] ERROR {self.command} {self.path}\n' + traceback.format_exc(), flush=True)
-            return j(self, {'error': 'Internal server error'}, status=500)
+            try:
+                return j(self, {'error': 'Internal server error'}, status=500)
+            except (BrokenPipeError, ConnectionResetError):
+                return  # client already gone
 
 
 def main():

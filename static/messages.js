@@ -331,7 +331,7 @@ function startApprovalPolling(sid) {
       if (data.pending) { data.pending._session_id=sid; showApprovalCard(data.pending); }
       else { hideApprovalCard(); }
     } catch(e) { /* ignore poll errors */ }
-  }, 1500);
+  }, 4000);
 }
 
 function stopApprovalPolling() {
