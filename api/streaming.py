@@ -243,7 +243,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         s2 = str(v); args_snap[k] = s2[:120]+('...' if len(s2)>120 else '')
                 put('tool', {'name': name, 'preview': preview, 'args': args_snap})
                 # also check for pending approval and surface it immediately
-                from tools.approval import has_pending as _has_pending, _pending, _lock
+                from webui_tools.approval import has_pending as _has_pending, _pending, _lock
                 if _has_pending(session_id):
                     with _lock:
                         p = dict(_pending.get(session_id, {}))

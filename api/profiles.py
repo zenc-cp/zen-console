@@ -102,7 +102,7 @@ def _set_hermes_home(home: Path):
 
     # Patch skills_tool module-level cache (snapshots HERMES_HOME at import)
     try:
-        import tools.skills_tool as _sk
+        import webui_tools.skills_tool as _sk
         _sk.HERMES_HOME = home
         _sk.SKILLS_DIR = home / 'skills'
     except (ImportError, AttributeError):

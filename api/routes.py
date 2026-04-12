@@ -35,7 +35,7 @@ from api.streaming import _sse, _run_agent_streaming, cancel_stream
 
 # Approval system (optional -- graceful fallback if agent not available)
 try:
-    from tools.approval import (
+    from webui_tools.approval import (
         has_pending, pop_pending, submit_pending,
         approve_session, approve_permanent, save_permanent_allowlist,
         is_approved, _pending, _lock, _permanent_approved,
@@ -256,13 +256,13 @@ def handle_get(handler, parsed):
 
     # ── Skills API (GET) ──
     if parsed.path == '/api/skills':
-        from tools.skills_tool import skills_list as _skills_list
+        from webui_tools.skills_tool import skills_list as _skills_list
         raw = _skills_list()
         data = json.loads(raw) if isinstance(raw, str) else raw
         return j(handler, {'skills': data.get('skills', [])})
 
     if parsed.path == '/api/skills/content':
-        from tools.skills_tool import skill_view as _skill_view, SKILLS_DIR
+        from webui_tools.skills_tool import skill_view as _skill_view, SKILLS_DIR
         qs = parse_qs(parsed.query)
         name = qs.get('name', [''])[0]
         if not name: return j(handler, {'error': 'name required'}, status=400)
@@ -1202,7 +1202,7 @@ def _handle_skill_save(handler, body):
     category = body.get('category', '').strip()
     if category and ('/' in category or '..' in category):
         return bad(handler, 'Invalid category')
-    from tools.skills_tool import SKILLS_DIR
+    from webui_tools.skills_tool import SKILLS_DIR
     if category:
         skill_dir = SKILLS_DIR / category / skill_name
     else:
@@ -1216,7 +1216,7 @@ def _handle_skill_save(handler, body):
 def _handle_skill_delete(handler, body):
     try: require(body, 'name')
     except ValueError as e: return bad(handler, str(e))
-    from tools.skills_tool import SKILLS_DIR
+    from webui_tools.skills_tool import SKILLS_DIR
     import shutil
     matches = list(SKILLS_DIR.rglob(f'{body["name"]}/SKILL.md'))
     if not matches: return bad(handler, 'Skill not found', 404)

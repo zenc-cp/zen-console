@@ -545,7 +545,7 @@ def get_available_models() -> dict:
                     'provider': 'OpenRouter',
                     'models': [{'id': m['id'], 'label': m['label']} for m in _FALLBACK_MODELS],
                 })
-            elif pid in _PROVIDER_MODELS:
+            elif pid in _PROVIDER_MODELS and _PROVIDER_MODELS[pid]:
                 groups.append({
                     'provider': provider_name,
                     'models': _PROVIDER_MODELS[pid],
