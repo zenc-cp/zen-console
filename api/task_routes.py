@@ -225,8 +225,105 @@ def register_task_routes_get(path, handler, parsed):
         return handle_task_get(handler, parsed)
     if path == '/api/task/result':
         return handle_task_result(handler, parsed)
+    if path == '/api/task/stream':
+        return handle_task_stream(handler, parsed)
     if path == '/api/tasks':
         return handle_task_list(handler, parsed)
     if path == '/api/worker/status':
         return handle_worker_status(handler, parsed)
+    if path == '/api/notifications/pending':
+        return handle_notifications_pending(handler, parsed)
     return None
+
+
+def handle_task_stream(handler, parsed):
+    """SSE stream for a running background task. Live token/thinking/tool events.
+    
+    GET /api/task/stream?task_id=X
+    
+    Subscribe to the task's event broadcast. If the task is already completed,
+    sends the result immediately and closes. If queued, waits until it starts.
+    Browser can disconnect anytime — worker keeps running.
+    """
+    import json as _json
+    import queue as _queue
+    from urllib.parse import parse_qs
+    from api.task_store import get_task_store
+    from api.task_worker import subscribe_task, unsubscribe_task
+
+    qs = parse_qs(parsed.query)
+    task_id = qs.get('task_id', [''])[0]
+    if not task_id:
+        return j(handler, {'error': 'task_id required'}, status=400)
+
+    store = get_task_store()
+    task = store.get_task(task_id)
+    if not task:
+        return j(handler, {'error': 'task not found'}, status=404)
+
+    # If already completed/failed, send result immediately as SSE then close
+    if task['status'] in ('completed', 'failed', 'cancelled'):
+        handler.send_response(200)
+        handler.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+        handler.send_header('Cache-Control', 'no-cache')
+        handler.send_header('X-Accel-Buffering', 'no')
+        handler.end_headers()
+        if task['status'] == 'completed':
+            _sse_write(handler, 'done', {'result': task.get('result', '')})
+        elif task['status'] == 'failed':
+            _sse_write(handler, 'error', {'message': task.get('error', 'unknown error')})
+        else:
+            _sse_write(handler, 'cancel', {'message': 'Task was cancelled'})
+        return True
+
+    # Subscribe to live events
+    sub_q = subscribe_task(task_id)
+    
+    handler.send_response(200)
+    handler.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+    handler.send_header('Cache-Control', 'no-cache')
+    handler.send_header('X-Accel-Buffering', 'no')
+    handler.send_header('Connection', 'keep-alive')
+    handler.end_headers()
+
+    try:
+        while True:
+            try:
+                event, data = sub_q.get(timeout=30)
+            except _queue.Empty:
+                # Heartbeat
+                try:
+                    handler.wfile.write(b': heartbeat\n\n')
+                    handler.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    break
+                continue
+
+            _sse_write(handler, event, data)
+
+            if event in ('done', 'error', 'cancel'):
+                break
+    except (BrokenPipeError, ConnectionResetError):
+        pass  # browser disconnected — worker keeps running
+    finally:
+        unsubscribe_task(task_id, sub_q)
+
+    return True
+
+
+def handle_notifications_pending(handler, parsed):
+    """GET /api/notifications/pending — returns and consumes pending browser notifications."""
+    from api.task_notify import get_pending_notifications
+    notifications = get_pending_notifications()
+    return j(handler, notifications)
+
+
+def _sse_write(handler, event, data):
+    """Write a single SSE event to the handler."""
+    import json as _json
+    payload = _json.dumps(data) if not isinstance(data, str) else data
+    try:
+        handler.wfile.write(f'event: {event}\ndata: {payload}\n\n'.encode())
+        handler.wfile.flush()
+    except (BrokenPipeError, ConnectionResetError):
+        pass

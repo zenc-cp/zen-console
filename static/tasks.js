@@ -161,6 +161,11 @@ function renderTaskCard(task) {
         (task.prompt && task.prompt.substring(0, 80)) || '';
     var tokens = (task.progress && task.progress.tokens) || 0;
 
+    var watchBtn = task.status === 'running'
+        ? '<button onclick="event.stopPropagation();watchTask(\'' + task.task_id + '\')" ' +
+          'style="background:none;border:1px solid #00ff88;color:#00ff88;border-radius:2px;' +
+          'padding:2px 6px;margin-top:4px;cursor:pointer;font-size:5px;margin-right:4px;">Watch Live</button>'
+        : '';
     var cancelBtn = (task.status === 'queued' || task.status === 'running')
         ? '<button onclick="event.stopPropagation();cancelTask(\'' + task.task_id + '\')" ' +
           'style="background:none;border:1px solid #ff4488;color:#ff4488;border-radius:2px;' +
@@ -192,6 +197,7 @@ function renderTaskCard(task) {
         '  </div>' +
         tokenLine +
         previewLine +
+        watchBtn +
         cancelBtn +
         retryBtn +
         '</div>';
@@ -455,3 +461,120 @@ window.toggleTaskPanel = toggleTaskPanel;
 window.cancelTask = cancelTask;
 window.retryTask = retryTask;
 window.viewTaskResult = viewTaskResult;
+
+// ── Live task stream viewer ──────────────────────────────────────────────────
+
+function watchTask(taskId) {
+    // Open SSE stream to watch a running task in real-time
+    const prefix = (location.pathname.match(/^\/[^\/]+/) || [''])[0];
+    const url = `${location.origin}${prefix}/api/task/stream?task_id=${taskId}`;
+    
+    // Create modal for live viewing
+    const modal = document.createElement('div');
+    modal.id = 'taskStreamModal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:1000;display:flex;align-items:center;justify-content:center;';
+    modal.innerHTML = `
+        <div style="background:#0c0e1a;border:1px solid #1e293b;border-radius:8px;padding:16px;width:90%;max-width:700px;max-height:80vh;display:flex;flex-direction:column;position:relative;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <span style="color:#00ff88;font-family:monospace;font-size:11px;">⚡ LIVE: ${taskId}</span>
+                <div>
+                    <button id="taskStreamCancel" style="background:none;border:1px solid #ff4488;color:#ff4488;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:10px;margin-right:8px;">Cancel Task</button>
+                    <button id="taskStreamClose" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:16px;">✕</button>
+                </div>
+            </div>
+            <div id="taskStreamThinking" style="display:none;background:rgba(100,116,139,0.1);border:1px solid #334155;border-radius:4px;padding:8px;margin-bottom:8px;max-height:120px;overflow-y:auto;">
+                <div style="color:#64748b;font-size:9px;margin-bottom:4px;">💭 Thinking...</div>
+                <pre id="taskStreamThinkingText" style="color:#94a3b8;font-size:10px;margin:0;white-space:pre-wrap;font-family:monospace;"></pre>
+            </div>
+            <div id="taskStreamContent" style="flex:1;overflow-y:auto;font-family:monospace;color:#e2e8f0;font-size:12px;white-space:pre-wrap;padding:8px;background:rgba(30,41,59,0.3);border-radius:4px;min-height:200px;"></div>
+            <div id="taskStreamStatus" style="margin-top:8px;color:#64748b;font-size:9px;font-family:monospace;">Connecting...</div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    
+    const contentEl = document.getElementById('taskStreamContent');
+    const thinkingEl = document.getElementById('taskStreamThinking');
+    const thinkingText = document.getElementById('taskStreamThinkingText');
+    const statusEl = document.getElementById('taskStreamStatus');
+    let tokenCount = 0;
+    let es = null;
+    
+    function closeStream() {
+        if (es) { es.close(); es = null; }
+        modal.remove();
+    }
+    
+    document.getElementById('taskStreamClose').onclick = closeStream;
+    modal.onclick = (e) => { if (e.target === modal) closeStream(); };
+    document.getElementById('taskStreamCancel').onclick = () => {
+        cancelTask(taskId);
+        closeStream();
+    };
+    
+    // Open EventSource
+    es = new EventSource(url);
+    
+    es.addEventListener('token', (e) => {
+        try {
+            const data = JSON.parse(e.data);
+            const text = data.text || '';
+            contentEl.textContent += text;
+            tokenCount++;
+            statusEl.textContent = `⚡ Streaming... ${tokenCount} tokens`;
+            contentEl.scrollTop = contentEl.scrollHeight;
+        } catch(err) {}
+    });
+    
+    es.addEventListener('thinking', (e) => {
+        try {
+            const data = JSON.parse(e.data);
+            const text = data.text || '';
+            thinkingEl.style.display = 'block';
+            thinkingText.textContent += text;
+            thinkingText.scrollTop = thinkingText.scrollHeight;
+        } catch(err) {}
+    });
+    
+    es.addEventListener('tool_call', (e) => {
+        try {
+            const data = JSON.parse(e.data);
+            statusEl.textContent = `🔧 Tool: ${data.name || 'unknown'}`;
+        } catch(err) {}
+    });
+    
+    es.addEventListener('done', (e) => {
+        statusEl.textContent = `✅ Complete — ${tokenCount} tokens`;
+        statusEl.style.color = '#00ff88';
+        if (es) es.close();
+        refreshTaskList();
+    });
+    
+    es.addEventListener('error', (e) => {
+        // SSE error can mean stream ended or connection lost
+        if (es && es.readyState === EventSource.CLOSED) {
+            statusEl.textContent = '⏹ Stream ended';
+        } else {
+            statusEl.textContent = '❌ Connection lost — task continues in background';
+            statusEl.style.color = '#ff4488';
+        }
+        if (es) es.close();
+    });
+    
+    es.addEventListener('cancel', (e) => {
+        statusEl.textContent = '🚫 Task cancelled';
+        statusEl.style.color = '#64748b';
+        if (es) es.close();
+    });
+    
+    es.onerror = () => {
+        // Suppress default EventSource reconnect
+        if (es) es.close();
+        es = null;
+        if (statusEl.textContent === 'Connecting...') {
+            statusEl.textContent = '❌ Failed to connect — task may have already finished';
+            statusEl.style.color = '#ff4488';
+        }
+    };
+}
+
+window.watchTask = watchTask;

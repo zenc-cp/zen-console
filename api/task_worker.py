@@ -14,6 +14,11 @@ import time
 
 from api.task_store import TaskStore
 
+# Live stream subscribers: task_id -> list[queue.Queue]
+# Browser SSE consumers register here to watch a running task in real-time.
+TASK_SUBSCRIBERS: dict[str, list[queue.Queue]] = {}
+TASK_SUBSCRIBERS_LOCK = threading.Lock()
+
 
 class BackgroundWorker:
     def __init__(self, store: TaskStore, poll_interval: float = 2.0, max_retries: int = 1):
@@ -112,6 +117,9 @@ class BackgroundWorker:
                     })
                     continue
 
+                # Broadcast event to any live SSE subscribers
+                self._broadcast(task_id, event, data)
+
                 if event == 'token':
                     text = data.get('text', '') if isinstance(data, dict) else str(data)
                     full_text.append(text)
@@ -159,6 +167,22 @@ class BackgroundWorker:
 
     # ── notification ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _broadcast(task_id: str, event: str, data) -> None:
+        """Send event to all live SSE subscribers for this task."""
+        with TASK_SUBSCRIBERS_LOCK:
+            subs = TASK_SUBSCRIBERS.get(task_id)
+            if not subs:
+                return
+            dead = []
+            for i, sq in enumerate(subs):
+                try:
+                    sq.put_nowait((event, data))
+                except Exception:
+                    dead.append(i)
+            for i in reversed(dead):
+                subs.pop(i)
+
     def _notify(self, task: dict, result: str) -> None:
         """Fire completion notification; failure must not crash the worker."""
         notify_config = task.get('notify_config')
@@ -202,3 +226,28 @@ def start_background_worker() -> BackgroundWorker:
 
 def get_worker() -> BackgroundWorker | None:
     return _worker
+
+
+# ── Live stream helpers ───────────────────────────────────────────────────────
+
+def subscribe_task(task_id: str) -> queue.Queue:
+    """Register a new SSE subscriber for a running task. Returns the queue to read from."""
+    q = queue.Queue()
+    with TASK_SUBSCRIBERS_LOCK:
+        if task_id not in TASK_SUBSCRIBERS:
+            TASK_SUBSCRIBERS[task_id] = []
+        TASK_SUBSCRIBERS[task_id].append(q)
+    return q
+
+
+def unsubscribe_task(task_id: str, q: queue.Queue) -> None:
+    """Remove a subscriber queue."""
+    with TASK_SUBSCRIBERS_LOCK:
+        subs = TASK_SUBSCRIBERS.get(task_id)
+        if subs:
+            try:
+                subs.remove(q)
+            except ValueError:
+                pass
+            if not subs:
+                del TASK_SUBSCRIBERS[task_id]
