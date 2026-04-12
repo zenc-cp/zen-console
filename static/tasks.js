@@ -258,6 +258,8 @@ async function pollTasks() {
                             'success'
                         );
                         updateNotificationBadge();
+                        // Inject result into main chat stream if this is the active session
+                        injectTaskResultIntoChat(res.task);
                     }
                 }
             }
@@ -578,3 +580,55 @@ function watchTask(taskId) {
 }
 
 window.watchTask = watchTask;
+
+// ── Inject background task result into main chat stream ──────────────────────
+
+async function injectTaskResultIntoChat(task) {
+    // Only inject if the completed task belongs to the currently active session
+    if (typeof S === 'undefined' || !S.session) return;
+    if (task.session_id !== S.session.session_id) return;
+
+    // Fetch the full result
+    try {
+        var res = await api('/api/task/result?task_id=' + encodeURIComponent(task.task_id));
+        if (!res || !res.result) return;
+
+        // Check if we already injected this task (avoid duplicates on re-poll)
+        var alreadyInjected = S.messages.some(function(m) {
+            return m._bg_task === task.task_id;
+        });
+        if (alreadyInjected) return;
+
+        // Add user message (the prompt)
+        S.messages.push({
+            role: 'user',
+            content: task.prompt || '',
+            _ts: Date.now() / 1000,
+            _bg_task: task.task_id,
+        });
+
+        // Add assistant message (the result)
+        S.messages.push({
+            role: 'assistant',
+            content: res.result,
+            _ts: Date.now() / 1000 + 0.001,
+            _bg_task: task.task_id,
+        });
+
+        // Re-render the chat
+        if (typeof renderMessages === 'function') {
+            renderMessages();
+        }
+
+        // Scroll to bottom
+        var chatEl = document.getElementById('chatMessages') || document.querySelector('.messages');
+        if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
+
+    } catch (e) {
+        // Silent — result will still be in the task panel
+    }
+}
+
+// Also inject when user loads a session that has completed bg tasks
+// (the server-side _inject_into_session already saved them — this handles
+// the case where the user was watching the session live when the task finished)

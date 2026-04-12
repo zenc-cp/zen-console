@@ -146,6 +146,8 @@ class BackgroundWorker:
                     result_text = ''.join(full_text)
                     self._store.set_result(task_id, result_text, status='completed')
                     self._processed += 1
+                    # Inject into session message history
+                    self._inject_into_session(task, result_text)
                     # Fire notification
                     self._notify(task, result_text)
                     break
@@ -182,6 +184,39 @@ class BackgroundWorker:
                     dead.append(i)
             for i in reversed(dead):
                 subs.pop(i)
+
+    @staticmethod
+    def _inject_into_session(task: dict, result: str) -> None:
+        """Append user prompt + assistant result into the session message history.
+
+        This makes background task results appear in the main chat stream
+        when the user next loads the session.
+        """
+        try:
+            from api.models import get_session
+            session = get_session(task.get('session_id', ''))
+            if session is None:
+                return
+            import time as _time
+            ts = _time.time()
+            # Add user message (the task prompt)
+            session.messages.append({
+                'role': 'user',
+                'content': task.get('prompt', ''),
+                '_ts': ts,
+                '_bg_task': task.get('task_id', ''),
+            })
+            # Add assistant message (the result)
+            session.messages.append({
+                'role': 'assistant',
+                'content': result,
+                '_ts': ts + 0.001,
+                '_bg_task': task.get('task_id', ''),
+            })
+            session.save()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning('Failed to inject task result into session: %s', exc)
 
     def _notify(self, task: dict, result: str) -> None:
         """Fire completion notification; failure must not crash the worker."""
