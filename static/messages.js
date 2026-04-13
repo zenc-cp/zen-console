@@ -10,10 +10,12 @@ async function send(){
   // If busy, queue the message instead of dropping it
   if(S.busy){
     if(text){
-      MSG_QUEUE.push(text);
+      if(!S.session){await newSession();await renderSessionList();}
+      queueSessionMessage(S.session.session_id,{text,files:[...S.pendingFiles]});
       $('msg').value='';autoResize();
-      updateQueueBadge();
-      showToast(`Queued: "${text.slice(0,40)}${text.length>40?'\u2026':''}"`,2000);
+      S.pendingFiles=[];renderTray();
+      updateQueueBadge(S.session.session_id);
+      showToast(`Queued: "${text.slice(0,40)}${text.length>40?'…':''}"`,2000);
     }
     return;
   }
@@ -37,7 +39,7 @@ async function send(){
   S.toolCalls=[];  // clear tool calls from previous turn
   clearLiveToolCards();  // clear any leftover live cards from last turn
   S.messages.push(userMsg);renderMessages();appendThinking();setBusy(true);
-  INFLIGHT[activeSid]={messages:[...S.messages],uploaded};
+  INFLIGHT[activeSid]={messages:[...S.messages],uploaded,toolCalls:[]};
   startApprovalPolling(activeSid);
   S.activeStreamId = null;  // will be set after stream starts
 
@@ -81,7 +83,32 @@ async function send(){
   }
 
   // Open SSE stream and render tokens live
+  attachLiveStream(activeSid, streamId, uploaded);
+
+}
+
+const LIVE_STREAMS={};
+
+function closeLiveStream(sessionId, streamId){
+  const live=LIVE_STREAMS[sessionId];
+  if(!live) return;
+  if(streamId&&live.streamId!==streamId) return;
+  try{live.source.close();}catch(_){ }
+  delete LIVE_STREAMS[sessionId];
+}
+
+function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
+  if(!activeSid||!streamId) return;
+  const reconnecting=!!options.reconnecting;
+  closeLiveStream(activeSid);
+  if(!INFLIGHT[activeSid]) INFLIGHT[activeSid]={messages:[...S.messages],uploaded:[...uploaded],toolCalls:[]};
+  else {
+    if(uploaded.length) INFLIGHT[activeSid].uploaded=[...uploaded];
+    if(!Array.isArray(INFLIGHT[activeSid].toolCalls)) INFLIGHT[activeSid].toolCalls=[];
+  }
+
   let assistantText='';
+  let reasoningText='';
   let assistantRow=null;
   let assistantBody=null;
   // Thinking tag patterns for streaming display
@@ -90,8 +117,45 @@ async function send(){
     {open:'<|channel>thought\n',close:'<channel|>'}
   ];
 
+  function _isActiveSession(){
+    return !!(S.session&&S.session.session_id===activeSid);
+  }
+  function _closeSource(){
+    closeLiveStream(activeSid, streamId);
+  }
+  function syncInflightAssistantMessage(){
+    const inflight=INFLIGHT[activeSid];
+    if(!inflight) return;
+    if(!Array.isArray(inflight.messages)) inflight.messages=[];
+    let assistantIdx=-1;
+    for(let i=inflight.messages.length-1;i>=0;i--){
+      const msg=inflight.messages[i];
+      if(msg&&msg.role==='assistant'&&msg._live){assistantIdx=i;break;}
+    }
+    const ts=Date.now()/1000;
+    if(assistantIdx>=0){
+      inflight.messages[assistantIdx].content=assistantText;
+      inflight.messages[assistantIdx].reasoning=reasoningText||undefined;
+      inflight.messages[assistantIdx]._ts=inflight.messages[assistantIdx]._ts||ts;
+      return;
+    }
+    inflight.messages.push({role:'assistant',content:assistantText,reasoning:reasoningText||undefined,_live:true,_ts:ts});
+  }
   function ensureAssistantRow(){
-    if(assistantRow)return;
+    if(!_isActiveSession()) return;
+    if(assistantRow&&!assistantRow.isConnected){assistantRow=null;assistantBody=null;}
+    if(!assistantRow){
+      const existing=$('msgInner').querySelector('.msg-row[data-live-assistant="1"]');
+      if(existing){
+        assistantRow=existing;
+        assistantBody=existing.querySelector('.msg-body');
+      }
+    }
+    if(assistantRow){
+      if(typeof placeLiveToolCardsHost==='function') placeLiveToolCardsHost();
+      return;
+    }
+
     removeThinking();
     const tr=$('toolRunningRow');if(tr)tr.remove();
     $('emptyState').style.display='none';
@@ -115,6 +179,7 @@ async function send(){
   // and hiding content still inside an open thinking block.
   function _streamDisplay(){
     const raw=assistantText;
+    if(reasoningText) return raw;
     for(const {open,close} of _thinkPairs){
       // Trim leading whitespace before checking for the open tag — some models
       // (e.g. MiniMax) emit newlines before <think>.
@@ -134,15 +199,52 @@ async function send(){
     }
     return raw;
   }
+  function _parseStreamState(){
+    const raw=assistantText;
+    if(reasoningText){
+      return {thinkingText:reasoningText, displayText:_streamDisplay(), inThinking:false};
+    }
+    for(const {open,close} of _thinkPairs){
+      const trimmed=raw.trimStart();
+      if(trimmed.startsWith(open)){
+        const ci=trimmed.indexOf(close,open.length);
+        if(ci!==-1){
+          return {
+            thinkingText: trimmed.slice(open.length, ci).trim(),
+            displayText: trimmed.slice(ci+close.length).replace(/^\s+/,''),
+            inThinking:false,
+          };
+        }
+        return {
+          thinkingText: trimmed.slice(open.length).trim(),
+          displayText:'',
+          inThinking:true,
+        };
+      }
+      if(open.startsWith(trimmed)){
+        return {thinkingText:'', displayText:'', inThinking:true};
+      }
+    }
+    return {thinkingText:'', displayText:raw, inThinking:false};
+  }
+  function _renderLiveThinking(parsed){
+    const text=(parsed&&parsed.thinkingText)||'';
+    if(text||(parsed&&parsed.inThinking)){
+      if(typeof updateThinking==='function') updateThinking(text||'Thinking…');
+      else appendThinking();
+      return;
+    }
+    removeThinking();
+  }
   function _scheduleRender(){
     if(_renderPending) return;
     _renderPending=true;
     requestAnimationFrame(()=>{
       _renderPending=false;
+      const parsed=_parseStreamState();
+      _renderLiveThinking(parsed);
       if(assistantBody){
-        const txt=_streamDisplay();
-        const isThinking=!txt&&assistantText.length>0;
-        assistantBody.innerHTML=txt?renderMd(txt):(isThinking?'<span style="color:var(--muted);font-size:13px">Thinking\u2026</span>':'');
+        assistantBody.innerHTML=parsed.displayText?renderMd(parsed.displayText):'';
       }
       scrollIfPinned();
     });
@@ -153,17 +255,59 @@ async function send(){
       if(!S.session||S.session.session_id!==activeSid) return;
       const d=JSON.parse(e.data);
       assistantText+=d.text;
+      syncInflightAssistantMessage();
+      if(!S.session||S.session.session_id!==activeSid) return;
+
       ensureAssistantRow();
+      _scheduleRender();
+    });
+
+    source.addEventListener('reasoning',e=>{
+      const d=JSON.parse(e.data);
+      reasoningText += d.text || '';
+      syncInflightAssistantMessage();
+      if(!S.session||S.session.session_id!==activeSid) return;
       _scheduleRender();
     });
 
     source.addEventListener('tool',e=>{
       const d=JSON.parse(e.data);
+      const tc={name:d.name, preview:d.preview||'', args:d.args||{}, snippet:'', done:false, tid:d.tid||`live-${Date.now()}-${Math.random().toString(36).slice(2,8)}`};
+      if(!Array.isArray(INFLIGHT[activeSid].toolCalls)) INFLIGHT[activeSid].toolCalls=[];
+      INFLIGHT[activeSid].toolCalls.push(tc);
+      S.toolCalls=INFLIGHT[activeSid].toolCalls;
+
       if(!S.session||S.session.session_id!==activeSid) return;
       removeThinking();
       const oldRow=$('toolRunningRow');if(oldRow)oldRow.remove();
-      const tc={name:d.name, preview:d.preview||'', args:d.args||{}, snippet:'', done:false};
-      S.toolCalls.push(tc);
+      appendLiveToolCard(tc);
+      scrollIfPinned();
+    });
+
+    source.addEventListener('tool_complete',e=>{
+      const d=JSON.parse(e.data);
+      const inflight=INFLIGHT[activeSid];
+      if(!inflight) return;
+      if(!Array.isArray(inflight.toolCalls)) inflight.toolCalls=[];
+      let tc=null;
+      for(let i=inflight.toolCalls.length-1;i>=0;i--){
+        const cur=inflight.toolCalls[i];
+        if(cur&&cur.done===false&&(!d.name||cur.name===d.name)){
+          tc=cur;
+          break;
+        }
+      }
+      if(!tc){
+        tc={name:d.name||'tool', preview:d.preview||'', args:d.args||{}, snippet:'', done:true};
+        inflight.toolCalls.push(tc);
+      }
+      tc.preview=d.preview||tc.preview||'';
+      tc.args=d.args||tc.args||{};
+      tc.done=true;
+      tc.is_error=!!d.is_error;
+      if(d.duration!==undefined) tc.duration=d.duration;
+      S.toolCalls=inflight.toolCalls;
+      if(!S.session||S.session.session_id!==activeSid) return;
       appendLiveToolCard(tc);
       scrollIfPinned();
     });

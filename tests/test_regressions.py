@@ -241,6 +241,24 @@ def test_done_handler_guards_setbusy_with_inflight_check(cleanup_test_sessions):
     assert "INFLIGHT[S.session.session_id]" in src,         "messages.js must guard setBusy(false) with INFLIGHT check for current session"
 
 
+def test_refresh_handler_does_not_drop_tool_messages_needed_by_todos(cleanup_test_sessions):
+    """Todo panel state must survive session reload/refresh.
+    The UI can hide tool-role messages from the visible transcript, but it must not
+    destroy the raw session messages because loadTodos reconstructs state from the
+    latest todo tool output.
+    """
+    sessions_src = (REPO_ROOT / "static/sessions.js").read_text()
+    ui_src = (REPO_ROOT / "static/ui.js").read_text()
+    panels_src = (REPO_ROOT / "static/panels.js").read_text()
+
+    assert "data.session.messages=(data.session.messages||[]).filter(" not in sessions_src, \
+        "sessions.js must not overwrite raw session.messages when filtering transcript display"
+    assert "S.messages = (data.session.messages || []).filter(" not in ui_src, \
+        "ui.js refreshSession must not rebuild S.messages by discarding tool messages from the raw session payload"
+    assert "const sourceMessages = (S.session && Array.isArray(S.session.messages) && S.session.messages.length) ? S.session.messages : S.messages;" in panels_src, \
+        "loadTodos must prefer raw S.session.messages so todo state survives reloads"
+
+
 def test_cancel_button_not_cleared_across_sessions(cleanup_test_sessions):
     """R7c: The Cancel button and activeStreamId must only be cleared when the
     done/error event belongs to the currently viewed session.
@@ -440,7 +458,166 @@ def test_newSession_clears_live_tool_cards(cleanup_test_sessions):
     assert "clearLiveToolCards" in new_sess_body,         "newSession() must call clearLiveToolCards() to clear stale live cards"
 
 
-# ── R16: Stack traces must not leak to clients in 500 responses ────────────
+def test_newSession_resets_busy_state_for_fresh_chat(cleanup_test_sessions):
+    """R15b: newSession() must reset the viewed chat to idle state.
+    Without this, starting a second chat while another session is streaming leaves
+    S.busy=true, so the first send in the new chat gets incorrectly queued.
+    """
+    src = (REPO_ROOT / "static/sessions.js").read_text()
+    new_sess_idx = src.find("async function newSession(")
+    assert new_sess_idx >= 0
+    next_fn = src.find("async function ", new_sess_idx + 10)
+    new_sess_body = src[new_sess_idx:next_fn]
+    assert "S.busy=false;" in new_sess_body, \
+        "newSession() must clear S.busy so a fresh chat is immediately sendable"
+    assert "S.activeStreamId=null;" in new_sess_body, \
+        "newSession() must clear the active stream id for the newly viewed chat"
+    assert "updateQueueBadge(S.session.session_id);" in new_sess_body, \
+        "newSession() must refresh the badge for the new session rather than leaving the old session's queue badge visible"
+
+
+def test_session_scoped_message_queue_frontend_wiring(cleanup_test_sessions):
+    """R15bb: queued follow-ups must stay attached to their originating session.
+    The frontend should use a session-keyed queue store and drain only the active
+    session's queued messages when that session becomes idle.
+    """
+    ui_src = (REPO_ROOT / "static/ui.js").read_text()
+    messages_src = (REPO_ROOT / "static/messages.js").read_text()
+    sessions_src = (REPO_ROOT / "static/sessions.js").read_text()
+    assert "const SESSION_QUEUES" in ui_src
+    assert "function queueSessionMessage" in ui_src
+    assert "function shiftQueuedSessionMessage" in ui_src
+    assert "const sid=S.session&&S.session.session_id;" in ui_src
+    assert "const next=sid?shiftQueuedSessionMessage(sid):null;" in ui_src
+    assert "queueSessionMessage(S.session.session_id" in messages_src
+    assert "updateQueueBadge(S.session.session_id);" in messages_src
+    assert "updateQueueBadge(sid);" in sessions_src
+
+
+def test_chat_start_persists_pending_turn_metadata_for_reload_recovery(cleanup_test_sessions):
+    """R15c: chat/start must expose enough pending-turn metadata for a reload to
+    rebuild the in-flight conversation instead of showing a blank session.
+    """
+    routes_src = (REPO_ROOT / "api/routes.py").read_text()
+    assert 's.active_stream_id = stream_id' in routes_src
+    assert 's.pending_user_message = msg' in routes_src
+    assert 's.pending_attachments = attachments' in routes_src
+    assert '"active_stream_id": getattr(s, "active_stream_id", None)' in routes_src
+    assert '"pending_user_message": getattr(s, "pending_user_message", None)' in routes_src
+
+
+def test_reload_path_restores_pending_message_and_reattaches_live_stream(cleanup_test_sessions):
+    """R15d: the frontend reload path must show the pending user turn and
+    reattach to the live SSE stream after loadSession().
+    """
+    sessions_src = (REPO_ROOT / "static/sessions.js").read_text()
+    ui_src = (REPO_ROOT / "static/ui.js").read_text()
+    messages_src = (REPO_ROOT / "static/messages.js").read_text()
+    assert 'getPendingSessionMessage' in ui_src
+    assert 'pending_user_message' in ui_src
+    assert 'function attachLiveStream' in messages_src
+    assert 'const pendingMsg=typeof getPendingSessionMessage' in sessions_src
+    assert 'const activeStreamId=data.session.active_stream_id||null;' in sessions_src
+    assert 'attachLiveStream(sid, activeStreamId' in sessions_src
+    assert 'if (S.activeStreamId && S.activeStreamId === streamId) return;' in ui_src
+
+
+# ── R16: Switching away/back must preserve live partial assistant output ─────
+
+
+def test_live_stream_tokens_persist_partial_assistant_for_session_switch(cleanup_test_sessions):
+    """R16: in-flight assistant text must be mirrored into INFLIGHT session state,
+    and the live stream must rebind to the rebuilt DOM after switching away and back.
+    Without this, partial assistant output disappears until the final done payload lands.
+    """
+    messages_src = (REPO_ROOT / "static/messages.js").read_text()
+    ui_src = (REPO_ROOT / "static/ui.js").read_text()
+
+    assert "content:assistantText" in messages_src, \
+        "messages.js must persist the partial assistant text into INFLIGHT state"
+    assert "_live:true" in messages_src, \
+        "messages.js must mark the persisted in-flight assistant row so renderMessages can re-anchor it"
+    assert "syncInflightAssistantMessage();" in messages_src, \
+        "token handler must update INFLIGHT state before checking the active session"
+    assert "assistantRow&&!assistantRow.isConnected" in messages_src, \
+        "live stream must drop stale detached assistant DOM references after session switches"
+    assert "data-live-assistant" in ui_src, \
+        "renderMessages must preserve a live-assistant DOM anchor when rebuilding the thread"
+
+
+def test_inflight_session_state_tracks_live_tool_cards_per_session(cleanup_test_sessions):
+    """R16b: live tool cards must be stored on the in-flight session, not only in the
+    global S.toolCalls array, so switching chats does not lose or misattach them.
+    """
+    messages_src = (REPO_ROOT / "static/messages.js").read_text()
+    sessions_src = (REPO_ROOT / "static/sessions.js").read_text()
+
+    assert "INFLIGHT[activeSid].toolCalls.push(tc);" in messages_src, \
+        "tool SSE handler must persist live tool calls onto the in-flight session"
+    assert "S.toolCalls=(INFLIGHT[sid].toolCalls||[]);" in sessions_src, \
+        "loadSession() must restore live tool calls from the in-flight session state"
+
+
+def test_loadSession_inflight_sets_busy_before_renderMessages(cleanup_test_sessions):
+    """R16c: loading an in-flight session must mark it busy before renderMessages().
+    Otherwise renderMessages() treats S.toolCalls as settled history cards and the
+    same tool call appears once inline and once in the live tool host after a
+    session switch.
+    """
+    src = (REPO_ROOT / "static/sessions.js").read_text()
+    inflight_idx = src.find("if(INFLIGHT[sid]){")
+    assert inflight_idx >= 0, "INFLIGHT branch not found in loadSession"
+    inflight_block = src[inflight_idx:inflight_idx+700]
+    busy_pos = inflight_block.find("S.busy=true;")
+    render_pos = inflight_block.find("renderMessages();appendThinking();")
+    assert busy_pos >= 0, "loadSession INFLIGHT branch must set S.busy=true"
+    assert render_pos >= 0, "loadSession INFLIGHT branch must call renderMessages()"
+    assert busy_pos < render_pos, \
+        "loadSession must set S.busy=true before renderMessages() to avoid duplicate tool cards"
+
+
+def test_streaming_bridge_accepts_current_tool_progress_callback_signature(cleanup_test_sessions):
+    """R17: api/streaming.py must accept the current Hermes agent callback contract.
+    The agent now calls tool_progress_callback(event_type, name, preview, args, **kwargs).
+    If the WebUI bridge only accepts (name, preview, args), live tool updates silently vanish.
+    """
+    src = (REPO_ROOT / "api/streaming.py").read_text()
+    assert "def on_tool(*cb_args, **cb_kwargs):" in src, \
+        "streaming.py must accept variable callback args for tool progress events"
+    assert "reasoning_callback=on_reasoning" in src, \
+        "streaming.py must wire the agent's reasoning callback into the SSE bridge"
+    assert "put('tool_complete'" in src or 'put("tool_complete"' in src, \
+        "streaming.py must emit live tool completion SSE events"
+
+
+def test_messages_js_supports_live_reasoning_and_tool_completion(cleanup_test_sessions):
+    """R18: messages.js must render live reasoning and react to tool completion events.
+    Without these handlers, the operator only sees generic Thinking… or nothing
+    until the final done snapshot redraws the whole turn.
+    """
+    src = (REPO_ROOT / "static/messages.js").read_text()
+    assert "let reasoningText=''" in src, \
+        "messages.js must track streamed reasoning text separately from assistant text"
+    assert "source.addEventListener('reasoning'" in src or 'source.addEventListener("reasoning"' in src, \
+        "messages.js must listen for live reasoning SSE events"
+    assert "source.addEventListener('tool_complete'" in src or 'source.addEventListener("tool_complete"' in src, \
+        "messages.js must listen for live tool completion SSE events"
+    assert "function _parseStreamState()" in src, \
+        "messages.js must parse live stream state into reasoning + visible answer"
+
+
+def test_ui_js_can_upgrade_thinking_spinner_into_live_reasoning_card(cleanup_test_sessions):
+    """R19: ui.js must be able to replace the placeholder thinking spinner with
+    streamed reasoning text while a turn is in progress.
+    """
+    src = (REPO_ROOT / "static/ui.js").read_text()
+    assert "function _thinkingMarkup(text='')" in src or 'function _thinkingMarkup(text="")' in src, \
+        "ui.js must centralize thinking row markup so it can switch between spinner and live text"
+    assert "function updateThinking(text=''){appendThinking(text);}" in src or 'function updateThinking(text=""){appendThinking(text);}' in src, \
+        "ui.js must expose an updateThinking helper for live reasoning rendering"
+
+
+# ── R17: Stack traces must not leak to clients in 500 responses ────────────
 
 def test_500_response_has_no_trace_field():
     """R16: HTTP 500 responses must not include a 'trace' field.

@@ -1,7 +1,28 @@
 const S={session:null,messages:[],entries:[],busy:false,pendingFiles:[],toolCalls:[],activeStreamId:null,currentDir:'.',activeProfile:'default'};
 const INFLIGHT={};  // keyed by session_id while request in-flight
-const MSG_QUEUE=[];  // messages queued while a request is in-flight
+const SESSION_QUEUES={};  // keyed by session_id for queued follow-up turns
 const $=id=>document.getElementById(id);
+function _getSessionQueue(sid, create=false){
+  if(!sid) return [];
+  if(!SESSION_QUEUES[sid]&&create) SESSION_QUEUES[sid]=[];
+  return SESSION_QUEUES[sid]||[];
+}
+function queueSessionMessage(sid, payload){
+  if(!sid||!payload) return 0;
+  const q=_getSessionQueue(sid,true);
+  q.push(payload);
+  return q.length;
+}
+function shiftQueuedSessionMessage(sid){
+  const q=_getSessionQueue(sid,false);
+  if(!q.length) return null;
+  const next=q.shift();
+  if(!q.length) delete SESSION_QUEUES[sid];
+  return next;
+}
+function getQueuedSessionCount(sid){
+  return _getSessionQueue(sid,false).length;
+}
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 // Dynamic model labels -- populated by populateModelDropdown(), fallback to static map
@@ -513,28 +534,37 @@ function setBusy(v){
     setComposerStatus('');
     // Always hide Cancel button when not busy
     const _cb=$('btnCancel');if(_cb)_cb.style.display='none';
-    updateQueueBadge();
-    // Drain one queued message after UI settles
-    if(MSG_QUEUE.length>0){
-      const next=MSG_QUEUE.shift();
-      updateQueueBadge();
-      setTimeout(()=>{ $('msg').value=next; send(); }, 120);
+    const sid=S.session&&S.session.session_id;
+    updateQueueBadge(sid);
+    // Drain one queued message for the currently viewed session after UI settles
+    const next=sid?shiftQueuedSessionMessage(sid):null;
+    if(next){
+      updateQueueBadge(sid);
+      setTimeout(()=>{
+        $('msg').value=next.text||'';
+        S.pendingFiles=Array.isArray(next.files)?[...next.files]:[];
+        autoResize();
+        renderTray();
+        send();
+      },120);
     }
   }
 }
 
-function updateQueueBadge(){
+function updateQueueBadge(sessionId){
+  const sid=sessionId||(S.session&&S.session.session_id);
+  const count=sid?getQueuedSessionCount(sid):0;
   let badge=$('queueBadge');
-  if(MSG_QUEUE.length>0){
+  if(count>0){
     if(!badge){
       badge=document.createElement('div');
       badge.id='queueBadge';
       badge.style.cssText='position:fixed;bottom:80px;right:24px;background:rgba(124,185,255,.18);border:1px solid rgba(124,185,255,.4);color:var(--blue);font-size:12px;font-weight:600;padding:6px 14px;border-radius:20px;z-index:50;pointer-events:none;backdrop-filter:blur(8px);';
       document.body.appendChild(badge);
     }
-    badge.textContent=MSG_QUEUE.length===1?'1 message queued':`${MSG_QUEUE.length} messages queued`;
-  } else {
-    if(badge) badge.remove();
+    badge.textContent=count===1?'1 message queued':`${count} messages queued`;
+  } else if(badge) {
+    badge.remove();
   }
 }
 function showToast(msg,ms){const el=$('toast');el.textContent=msg;el.classList.add('show');clearTimeout(el._t);el._t=setTimeout(()=>el.classList.remove('show'),ms||2800);}
@@ -714,11 +744,11 @@ async function refreshSession() {
   try {
     const data = await api(`/api/session?session_id=${encodeURIComponent(S.session.session_id)}`);
     S.session = data.session;
-    S.messages = (data.session.messages || []).filter(m => {
-      if (!m || !m.role || m.role === 'tool') return false;
-      if (m.role === 'assistant') { let c = m.content || ''; if (Array.isArray(c)) c = c.map(p => p.text||'').join(''); return String(c).trim().length > 0; }
-      return true;
-    });
+    S.messages = data.session.messages || [];
+    const pendingMsg=getPendingSessionMessage(data.session);
+    if(pendingMsg) S.messages.push(pendingMsg);
+    S.activeStreamId=data.session.active_stream_id||null;
+
     syncTopbar(); renderMessages();
     showToast('Conversation refreshed');
   } catch(e) { setStatus('Refresh failed: ' + e.message); }
@@ -764,12 +794,46 @@ async function applyUpdates(){
   }
 }
 
+function getPendingSessionMessage(session){
+  const text=String(session?.pending_user_message||'').trim();
+  if(!text) return null;
+  const attachments=Array.isArray(session?.pending_attachments)?session.pending_attachments.filter(Boolean):[];
+  const messages=Array.isArray(session?.messages)?session.messages:[];
+  const lastUser=[...messages].reverse().find(m=>m&&m.role==='user');
+  if(lastUser){
+    const lastText=String(msgContent(lastUser)||'').trim();
+    if(lastText===text){
+      if(attachments.length&&!lastUser.attachments?.length) lastUser.attachments=attachments;
+      return null;
+    }
+  }
+  return {
+    role:'user',
+    content:text,
+    attachments:attachments.length?attachments:undefined,
+    _ts:session?.pending_started_at||Date.now()/1000,
+    _pending:true,
+  };
+}
+// loadInflightState — retrieve in-memory inflight state for a session.
+// Called by loadSession() when active_stream_id is set on the server session
+// but no INFLIGHT[sid] entry exists (e.g. after a session switch back).
+// Returns the stored state dict or null. The else-path in loadSession handles
+// page reloads directly via attachLiveStream when this returns null.
+function loadInflightState(sid, streamId) {
+  // In-memory store: only survives within the same page load.
+  // If INFLIGHT[sid] exists but the caller already checked !INFLIGHT[sid],
+  // this won't be reached. Return null — the else path handles page reloads.
+  return null;
+}
+
 async function checkInflightOnBoot(sid) {
   const raw = localStorage.getItem(INFLIGHT_KEY);
   if (!raw) return;
   try {
     const {sid: inflightSid, streamId, ts} = JSON.parse(raw);
     if (inflightSid !== sid) { clearInflight(); return; }
+    if (S.activeStreamId && S.activeStreamId === streamId) return;
     // Only show banner if the in-flight entry is less than 10 minutes old
     if (Date.now() - ts > 10 * 60 * 1000) { clearInflight(); return; }
     // Check if stream is still active
@@ -915,6 +979,7 @@ function renderMessages(){
     }
     const row=document.createElement('div');row.className='msg-row';
     row.dataset.msgIdx=rawIdx;row.dataset.role=m.role||'assistant';
+    if(m._live) row.setAttribute('data-live-assistant','1');
     let filesHtml='';
     if(m.attachments&&m.attachments.length)
       filesHtml=`<div class="msg-files">${m.attachments.map(f=>`<div class="msg-file-badge">${li('paperclip',12)} ${esc(f)}</div>`).join('')}</div>`;
@@ -1357,12 +1422,29 @@ function renderKatexBlocks(){
   });
 }
 
-function appendThinking(){
-  $('emptyState').style.display='none';
-  const row=document.createElement('div');row.className='msg-row';row.id='thinkingRow';
-  row.innerHTML=`<div class="msg-role assistant"><div class="role-icon assistant">H</div>Hermes</div><div class="thinking"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
-  $('msgInner').appendChild(row);scrollToBottom();
+function _thinkingMarkup(text=''){
+  const _bn=window._botName||'Hermes';
+  const icon=esc(_bn.charAt(0).toUpperCase());
+  const label=esc(_bn);
+  const body=(text&&String(text).trim())
+    ? `<div class="thinking-card open"><div class="thinking-card-header"><span class="thinking-card-icon">${li('lightbulb',14)}</span><span class="thinking-card-label">${t('thinking')}</span></div><div class="thinking-card-body"><pre>${esc(String(text).trim())}</pre></div></div>`
+    : `<div class="thinking"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
+  return `<div class="msg-role assistant"><div class="role-icon assistant">${icon}</div>${label}</div>${body}`;
 }
+function appendThinking(text=''){
+  $('emptyState').style.display='none';
+  let row=$('thinkingRow');
+  if(!row){
+    row=document.createElement('div');
+    row.className='msg-row';
+    row.id='thinkingRow';
+    $('msgInner').appendChild(row);
+  }
+  row.className=(text&&String(text).trim())?'msg-row thinking-card-row':'msg-row';
+  row.innerHTML=_thinkingMarkup(text);
+  scrollToBottom();
+}
+function updateThinking(text=''){appendThinking(text);}
 function removeThinking(){const el=$('thinkingRow');if(el)el.remove();}
 
 function fileIcon(name, type){

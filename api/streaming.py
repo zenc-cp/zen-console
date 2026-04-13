@@ -172,23 +172,70 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 _token_sent = True
                 put('token', {'text': text})
 
-            def on_tool(name, preview, args):
+            def on_reasoning(text):
+                if text is None:
+                    return
+                put('reasoning', {'text': str(text)})
+
+            def on_tool(*cb_args, **cb_kwargs):
+                event_type = None
+                name = None
+                preview = None
+                args = None
+
+                if len(cb_args) >= 4:
+                    event_type, name, preview, args = cb_args[:4]
+                elif len(cb_args) == 3:
+                    name, preview, args = cb_args
+                    event_type = 'tool.started'
+                elif len(cb_args) == 2:
+                    event_type, name = cb_args
+                elif len(cb_args) == 1:
+                    name = cb_args[0]
+                    event_type = 'tool.started'
+
+                if event_type in ('reasoning.available', '_thinking'):
+                    reason_text = preview if event_type == 'reasoning.available' else name
+                    if reason_text:
+                        put('reasoning', {'text': str(reason_text)})
+                    return
+
                 args_snap = {}
                 if isinstance(args, dict):
                     for k, v in list(args.items())[:4]:
-                        s2 = str(v); args_snap[k] = s2[:120]+('...' if len(s2)>120 else '')
-                put('tool', {'name': name, 'preview': preview, 'args': args_snap})
-                # Fallback: poll for pending approval in case notify_cb wasn't
-                # registered (e.g. older approval module without gateway support).
-                try:
-                    from tools.approval import has_pending as _has_pending, _pending, _lock
-                    if _has_pending(session_id):
-                        with _lock:
-                            p = dict(_pending.get(session_id, {}))
-                        if p:
-                            put('approval', p)
-                except ImportError:
-                    pass
+                        s2 = str(v)
+                        args_snap[k] = s2[:120] + ('...' if len(s2) > 120 else '')
+
+                if event_type in (None, 'tool.started'):
+                    put('tool', {
+                        'event_type': event_type or 'tool.started',
+                        'name': name,
+                        'preview': preview,
+                        'args': args_snap,
+                    })
+                    # Fallback: poll for pending approval in case notify_cb wasn't
+                    # registered (e.g. older approval module without gateway support).
+                    try:
+                        from tools.approval import has_pending as _has_pending, _pending, _lock
+                        if _has_pending(session_id):
+                            with _lock:
+                                p = dict(_pending.get(session_id, {}))
+                            if p:
+                                put('approval', p)
+                    except ImportError:
+                        pass
+                    return
+
+                if event_type == 'tool.completed':
+                    put('tool_complete', {
+                        'event_type': event_type,
+                        'name': name,
+                        'preview': preview,
+                        'args': args_snap,
+                        'duration': cb_kwargs.get('duration'),
+                        'is_error': bool(cb_kwargs.get('is_error', False)),
+                    })
+                    return
 
             _AIAgent = _get_ai_agent()
             if _AIAgent is None:
@@ -252,6 +299,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 session_id=session_id,
                 session_db=_session_db,
                 stream_delta_callback=on_token,
+                reasoning_callback=on_reasoning,
                 tool_progress_callback=on_tool,
             )
 
@@ -458,6 +506,10 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         'assistant_msg_idx': asst_idx, 'args': args_snap,
                     })
             s.tool_calls = tool_calls
+            s.active_stream_id = None
+            s.pending_user_message = None
+            s.pending_attachments = []
+            s.pending_started_at = None
             # Tag the matching user message with attachment filenames for display on reload
             # Only tag a user message whose content relates to this turn's text
             # (msg_text is the full message including the [Attached files: ...] suffix)
@@ -516,6 +568,15 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 
     except Exception as e:
         print('[webui] stream error:\n' + traceback.format_exc(), flush=True)
+        if s is not None:
+            s.active_stream_id = None
+            s.pending_user_message = None
+            s.pending_attachments = []
+            s.pending_started_at = None
+            try:
+                s.save()
+            except Exception:
+                pass
         err_str = str(e)
         # Detect rate limit errors specifically so the client can show a helpful card
         # rather than the generic "Connection lost" message
