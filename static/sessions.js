@@ -28,6 +28,9 @@ async function newSession(flash){
 
 async function loadSession(sid){
   stopApprovalPolling();hideApprovalCard();
+  // Close any active SSE stream from the previous chat — prevents stale tokens
+  // from the old stream writing to DOM elements of the new chat after switch.
+  if(typeof _activeEs !== 'undefined' && _activeEs){_activeEs.close();_activeEs=null;}
   // B4: stop workspace watcher when switching sessions
   if(window._stopWorkspaceWatch) window._stopWorkspaceWatch();
   const data=await api(`/api/session?session_id=${encodeURIComponent(sid)}`);

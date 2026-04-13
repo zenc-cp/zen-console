@@ -1,5 +1,9 @@
 const DEFAULT_MODEL='openrouter/minimax/minimax-m2.7';
 
+// Global EventSource — only one stream active at a time.
+// Closed automatically when send() is called again or loadSession() switches chats.
+let _activeEs = null;
+
 async function send(){
   const text=$('msg').value.trim();
   if(!text&&!S.pendingFiles.length)return;
@@ -290,7 +294,8 @@ async function send(){
             const st=await api(`/api/chat/stream/status?stream_id=${encodeURIComponent(streamId)}`);
             if(st.active){
               setStatus('Reconnected');
-              _wireSSE(new EventSource(new URL(`/console/api/chat/stream?stream_id=${encodeURIComponent(streamId)}`,location.origin).href,{withCredentials:true}));
+              _activeEs = new EventSource(new URL(`/console/api/chat/stream?stream_id=${encodeURIComponent(streamId)}`,location.origin).href,{withCredentials:true});
+              _wireSSE(_activeEs);
               return;
             }
           }catch(_){}
@@ -335,7 +340,10 @@ async function send(){
     if(!S.session||!INFLIGHT[S.session.session_id]){setBusy(false);setStatus('Error: Connection lost');}
   }
 
-  _wireSSE(new EventSource(new URL(`/console/api/chat/stream?stream_id=${encodeURIComponent(streamId)}`,location.origin).href,{withCredentials:true}));
+  // Close any previous stream before starting a new one
+  if(_activeEs){_activeEs.close();_activeEs=null;}
+  _activeEs = new EventSource(new URL(`/console/api/chat/stream?stream_id=${encodeURIComponent(streamId)}`,location.origin).href,{withCredentials:true});
+  _wireSSE(_activeEs);
 
 }
 
