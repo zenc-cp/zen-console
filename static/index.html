@@ -22,6 +22,7 @@
       <button class="nav-tab" data-panel="workspaces" data-label="Spaces" onclick="switchPanel('workspaces')" title="Spaces">&#128193;</button>
       <button class="nav-tab" data-panel="profiles" data-label="Profiles" onclick="switchPanel('profiles')" title="Agent profiles"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></button>
       <button class="nav-tab" data-panel="todos" data-label="Todos" onclick="switchPanel('todos')" title="Current task list">&#9989;</button>
+      <button class="nav-tab" data-panel="wasessions" data-label="WA" onclick="switchPanel('wasessions')" title="WhatsApp sessions">&#128172;</button>
     </div>
     <!-- Chat panel -->
     <div class="panel-view active" id="panelChat">
@@ -110,6 +111,16 @@
       <div style="padding:10px 12px 4px;font-size:11px;color:var(--muted)">Add and switch workspaces for your sessions.</div>
       <div style="flex:1;overflow-y:auto;padding:0 12px 12px" id="workspacesPanel"><div style="color:var(--muted);font-size:12px">Loading...</div></div>
     </div>
+    <!-- WhatsApp Sessions panel -->
+    <div class="panel-view" id="panelWasessions">
+      <div class="sidebar-section" style="padding:8px 12px 4px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border2);flex-shrink:0">
+        <div style="font-size:11px;color:var(--muted)">WhatsApp sessions</div>
+        <button class="cron-btn" style="padding:2px 7px;font-size:10px" onclick="loadWASessionsPanel()">&#8635; Refresh</button>
+      </div>
+      <div style="padding:6px 12px 4px;font-size:11px;color:var(--muted)">Recent WhatsApp commands and responses</div>
+      <div style="flex:1;overflow-y:auto;padding:0 12px 12px" id="wasessionsPanel"><div style="color:var(--muted);font-size:12px">Loading...</div></div>
+    </div>
+
     <!-- Profiles panel -->
     <div class="panel-view" id="panelProfiles">
       <div class="sidebar-section" style="padding-bottom:4px;display:flex;align-items:center;justify-content:space-between">

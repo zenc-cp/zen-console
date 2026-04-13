@@ -4,13 +4,14 @@ let _skillsData = null; // cached skills list
 async function switchPanel(name) {
   _currentPanel = name;
   // Update nav tabs
-  document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.panel === name));
+  document.querySelectorAll('.nav-tab').forEach(t=>t.classList.toggle('active',t.dataset.panel===name));
   // Update panel views
-  document.querySelectorAll('.panel-view').forEach(p => p.classList.remove('active'));
-  const panelEl = $('panel' + name.charAt(0).toUpperCase() + name.slice(1));
-  if (panelEl) panelEl.classList.add('active');
+  document.querySelectorAll('.panel-view').forEach(p=>p.classList.remove('active'));
+  const panelEl=$('panel'+name.charAt(0).toUpperCase()+name.slice(1));
+  if(panelEl)panelEl.classList.add('active');
   // Lazy-load panel data
-  if (name === 'tasks') await loadCrons();
+  if(name==='tasks')loadTasksPanel();
+  if(name==='wasessions')loadWASessionsPanel();
   if (name === 'skills') await loadSkills();
   if (name === 'memory') await loadMemory();
   if (name === 'workspaces') await loadWorkspacesPanel();
@@ -1143,4 +1144,76 @@ function dismissErrorBanner(){
   if(banner) banner.style.display='none';
 }
 
-// Event wiring
+// ── WhatsApp Sessions panel ─────────────────────────────────────────────────────
+
+async function loadWASessionsPanel() {
+  const panel = $('wasessionsPanel');
+  if (!panel) return;
+  try {
+    const data = await api('/api/wa-sessions');
+    renderWASessionsPanel(data.sessions || []);
+  } catch (e) {
+    panel.innerHTML = '<div style="color:var(--error);font-size:12px;padding:8px">Failed to load: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderWASessionsPanel(sessions) {
+  const panel = $('wasessionsPanel');
+  panel.innerHTML = '';
+
+  if (!sessions || sessions.length === 0) {
+    panel.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">No WhatsApp sessions yet. Send a message on WhatsApp to see it here.</div>';
+    return;
+  }
+
+  // Group consecutive user/assistant pairs into conversation cards
+  for (const entry of sessions) {
+    const isUser = entry.role === 'user';
+    const icon = isUser ? '&#128447;' : '&#128172;';
+    const bgColor = isUser ? 'rgba(124,185,255,.07)' : 'rgba(255,255,255,.03)';
+    const borderColor = isUser ? 'rgba(124,185,255,.2)' : 'rgba(255,255,255,.06)';
+    const label = isUser ? 'You (WA)' : 'ZenOps';
+    const handler = entry.handler || '';
+    const handlerLabel = handler ? '<span style="font-size:9px;background:var(--border2);padding:1px 5px;border-radius:4px;margin-left:6px;color:var(--muted)">' + esc(handler.replace('intent-', '')) + '</span>' : '';
+
+    const time = entry.ts ? new Date(entry.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '?';
+
+    const card = document.createElement('div');
+    card.style.cssText = 'margin-bottom:10px;border-radius:8px;border:1px solid ' + borderColor + ';background:' + bgColor + ';padding:8px 10px';
+
+    if (isUser) {
+      // User message: show text
+      card.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:11px;color:var(--accent)">' + icon + ' ' + label + '</span><span style="font-size:9px;color:var(--muted)">' + time + '</span>' + handlerLabel + '</div>';
+      const msgDiv = document.createElement('div');
+      msgDiv.style.cssText = 'font-size:12px;color:var(--text);line-height:1.5;word-break:break-word';
+      msgDiv.textContent = entry.text;
+      card.appendChild(msgDiv);
+
+      // Show assistant response if available
+      if (entry.response) {
+        const respDiv = document.createElement('div');
+        respDiv.style.cssText = 'margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.06);font-size:11px;color:var(--muted);line-height:1.5;white-space:pre-wrap;word-break:break-word';
+        respDiv.textContent = entry.response.length > 300 ? entry.response.substring(0, 300) + '...' : entry.response;
+        card.appendChild(respDiv);
+      }
+    } else {
+      // Assistant-only entry (e.g. zeroclaw response with no prior user log)
+      card.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:11px;color:var(--text)">' + icon + ' ' + label + '</span><span style="font-size:9px;color:var(--muted)">' + time + '</span><span style="font-size:9px;background:var(--border2);padding:1px 5px;border-radius:4px;color:var(--muted)">' + esc(handler) + '</span></div>';
+      const respDiv = document.createElement('div');
+      respDiv.style.cssText = 'font-size:11px;color:var(--muted);line-height:1.5;white-space:pre-wrap;word-break:break-word';
+      respDiv.textContent = (entry.text || '').length > 300 ? entry.text.substring(0, 300) + '...' : (entry.text || '');
+      if (entry.response && entry.response !== entry.text) {
+        respDiv.textContent += '\n' + (entry.response.length > 200 ? entry.response.substring(0, 200) + '...' : entry.response);
+      }
+      card.appendChild(respDiv);
+    }
+
+    panel.appendChild(card);
+  }
+
+  // Auto-refresh every 10s when panel is visible
+  if (window._waSessionsInterval) clearInterval(window._waSessionsInterval);
+  window._waSessionsInterval = setInterval(loadWASessionsPanel, 10000);
+}
+
+// ── Event wiring

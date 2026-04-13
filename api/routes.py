@@ -254,6 +254,29 @@ def handle_get(handler, parsed):
     if parsed.path == '/api/crons/recent':
         return _handle_cron_recent(handler, parsed)
 
+    # ── WhatsApp Session Log (GET) ──
+    if parsed.path == '/api/wa-sessions':
+        # Read WhatsApp sessions from claw/logs/wa-sessions.jsonl
+        # Returns last 50 entries, newest first
+        from pathlib import Path
+        log_path = Path('/home/slimslimchan/claw/logs/wa-sessions.jsonl')
+        if not log_path.exists():
+            return j(handler, {'sessions': [], 'count': 0})
+        try:
+            lines = log_path.read_text().strip().split('\n')
+            entries = []
+            for line in reversed(lines[-50:]):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except Exception:
+                    pass
+            return j(handler, {'sessions': entries, 'count': len(entries)})
+        except Exception as e:
+            return j(handler, {'sessions': [], 'error': str(e)}, status=500)
+
     # ── Skills API (GET) ──
     if parsed.path == '/api/skills':
         from webui_tools.skills_tool import skills_list as _skills_list
