@@ -31,7 +31,10 @@ except ImportError:
     _lock = threading.Lock()
     _permanent_approved: set = set()
 
-    def _real_submit_pending(*a, **k): pass
+    def _real_submit_pending(session_key: str, approval: dict) -> None:
+        with _lock:
+            _pending[session_key] = approval
+
     def _real_approve_session(*a, **k): pass
     def _real_approve_permanent(*a, **k): pass
     def _real_save_permanent_allowlist(*a, **k): pass
