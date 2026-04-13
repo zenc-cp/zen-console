@@ -14,6 +14,17 @@ from api.config import (
 )
 from api.workspace import get_last_workspace
 
+# P4: In-memory cache for session index — avoids disk I/O on every sidebar open
+_INDEX_CACHE_TTL = 5.0  # seconds
+_index_cache = []
+_index_cache_time = 0.0
+
+
+def _invalidate_index_cache():
+    """Invalidate the session index cache (call whenever sessions are modified)."""
+    global _index_cache_time
+    _index_cache_time = 0.0
+
 
 def _write_session_index():
     """Rebuild the session index file for O(1) future reads."""
@@ -31,6 +42,10 @@ def _write_session_index():
                 entries.append(s.compact())
     entries.sort(key=lambda s: s['updated_at'], reverse=True)
     SESSION_INDEX_FILE.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding='utf-8')
+    # P4: refresh cache so next all_sessions() call doesn't re-read disk
+    global _index_cache, _index_cache_time
+    _index_cache = entries
+    _index_cache_time = time.monotonic()
 
 
 class Session:
@@ -126,10 +141,29 @@ def new_session(workspace=None, model=None):
     return s
 
 def all_sessions():
-    # Phase C: try index first for O(1) read; fall back to full scan
+    global _index_cache, _index_cache_time
+    # P4: use in-memory cache if fresh (within TTL); fall back to index file or full scan
+    now = time.monotonic()
+    if _index_cache and (now - _index_cache_time) < _INDEX_CACHE_TTL:
+        # Return cached index, overlay in-memory sessions and backfill profile
+        index_map = {s['session_id']: s for s in _index_cache}
+        with LOCK:
+            for s in SESSIONS.values():
+                index_map[s.session_id] = s.compact()
+        result = sorted(index_map.values(), key=lambda s: (s.get('pinned', False), s['updated_at']), reverse=True)
+        result = [s for s in result if not (s.get('title','Untitled')=='Untitled' and s.get('message_count',0)==0)]
+        for s in result:
+            if not s.get('profile'):
+                s['profile'] = 'default'
+        return result
+
+    # Index file read (original Phase C logic)
     if SESSION_INDEX_FILE.exists():
         try:
             index = json.loads(SESSION_INDEX_FILE.read_text(encoding='utf-8'))
+            # P4: populate cache on first read
+            _index_cache = list(index)
+            _index_cache_time = now
             # Overlay any in-memory sessions that may be newer than the index
             index_map = {s['session_id']: s for s in index}
             with LOCK:
@@ -162,6 +196,9 @@ def all_sessions():
     for s in result:
         if not s.get('profile'):
             s['profile'] = 'default'
+    # P4: cache the result
+    _index_cache = list(result)
+    _index_cache_time = now
     return result
 
 

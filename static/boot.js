@@ -334,5 +334,44 @@ document.querySelectorAll('.suggestion').forEach(btn=>{
   // no saved session - show empty state, wait for user to hit +
   $('emptyState').style.display='';
   await renderSessionList();
+  // B2: Start ZenOps status polling (every 30s)
+  pollZenOpsStatus();
+  setInterval(pollZenOpsStatus, 30000);
 })();
+
+// B2: ZenOps status strip polling
+let _zenopsStatusInterval = null;
+async function pollZenOpsStatus(){
+  try{
+    const r = await fetch('/console/api/zenops-status');
+    if(!r.ok) return;
+    const d = await r.json();
+    renderZenOpsStatusBar(d);
+  }catch(e){}
+}
+
+function renderZenOpsStatusBar(d){
+  const bar = $('zenopsStatusBar');
+  const inner = $('zenopsStatusInner');
+  if(!bar || !inner) return;
+  bar.style.display = '';
+
+  const agents = d.agents || {};
+  const services = d.services || {};
+  const brainDot = d.brain === 'active' ? 'active' : d.brain === 'idle' ? 'idle' : 'stale';
+  const items = [
+    {label:'Brain', dot: brainDot},
+    {label:'Hunter', dot: agents.hunter?.status === 'active' ? 'active' : 'idle', extra: agents.hunter?.queue > 0 ? `(${agents.hunter.queue})` : ''},
+    {label:'Trader', dot: (agents.trader?.status || 'idle').startsWith('up') ? 'active' : (agents.trader?.status || 'idle').startsWith('down') ? 'stale' : 'idle', extra: agents.trader?.status !== 'idle' ? agents.trader.status : ''},
+    {label:'Sentinel', dot: 'idle'},
+    {label:'Scribe', dot: agents.scribe?.status === 'active' ? 'active' : 'idle'},
+    {label:'Conductor', dot: services.conductor === 'up' ? 'active' : 'down'},
+    {label:'Board', dot: services.board === 'up' ? 'active' : 'down'},
+  ];
+
+  inner.innerHTML = items.map(item => {
+    const extra = item.extra ? `<span class="zs-value">${item.extra}</span>` : '';
+    return `<div class="zs-item"><span class="zs-dot ${item.dot}"></span><span class="zs-label">${item.label}</span>${extra}</div>`;
+  }).join('<span class="zs-sep">|</span>');
+}
 

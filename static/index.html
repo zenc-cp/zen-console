@@ -199,6 +199,10 @@
         <button class="chip mobile-files-btn" id="btnMobileFiles" onclick="toggleMobileFiles()" title="Files">&#128193;</button>
       </div>
     </div>
+    <!-- B2: ZenOps status strip — polled every 30s by pollZenOpsStatus() -->
+    <div class="zenops-statusbar" id="zenopsStatusBar" style="display:none">
+      <div class="zenops-statusbar-inner" id="zenopsStatusInner"></div>
+    </div>
     <div class="messages" id="messages">
       <div class="empty-state" id="emptyState">
         <div class="empty-logo">🦉</div>

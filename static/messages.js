@@ -39,6 +39,8 @@ async function send(){
   S.toolCalls=[];  // clear tool calls from previous turn
   clearLiveToolCards();  // clear any leftover live cards from last turn
   S.messages.push(userMsg);renderMessages();appendThinking();setBusy(true);  // activity bar shown via setBusy
+  // P5: track the index where the pending assistant response will appear
+  S._pendingAsstMsgIdx = S.messages.length;  // userMsg at length, asst will be at length+1 after send
   INFLIGHT[activeSid]={messages:[...S.messages],uploaded};
   startApprovalPolling(activeSid);
   S.activeStreamId = null;  // will be set after stream starts
@@ -93,6 +95,9 @@ async function send(){
   let assistantText='';
   let assistantRow=null;
   let assistantBody=null;
+  // P1: RAF-throttled markdown buffering — only re-render every ~16ms instead of every token
+  let _rafPending=false;
+  let _doneProcessed=false;
 
   function ensureAssistantRow(){
     if(assistantRow)return;
@@ -109,6 +114,17 @@ async function send(){
     $('msgInner').appendChild(assistantRow);
   }
 
+  // P1: RAF-buffered render — accumulates tokens, renders at most once per animation frame
+  function _flushTokenBuffer(){
+    _rafPending=false;
+    // Don't render if done has already cleared the session or switched away
+    if(!S.session||S.session.session_id!==activeSid||!assistantBody) return;
+    if(assistantText){
+      assistantBody.innerHTML=renderMd(assistantText);
+      scrollIfPinned();
+    }
+  }
+
   // ── Shared SSE handler wiring (used for initial connection and reconnect) ──
   let _reconnectAttempted=false;
 
@@ -118,8 +134,11 @@ async function send(){
       const d=JSON.parse(e.data);
       assistantText+=d.text;
       ensureAssistantRow();
-      assistantBody.innerHTML=renderMd(assistantText);
-      scrollIfPinned();
+      // P1: throttle to RAF — no innerHTML update until next animation frame
+      if(!_rafPending){
+        _rafPending=true;
+        requestAnimationFrame(_flushTokenBuffer);
+      }
     });
 
     source.addEventListener('tool',e=>{
@@ -151,6 +170,7 @@ async function send(){
 
     source.addEventListener('done',e=>{
       source.close();
+      _doneProcessed=true;  // P1: blocks stale RAF callbacks from firing after DOM rebuild
       const d=JSON.parse(e.data);
       delete INFLIGHT[activeSid];
       clearInflight();
@@ -173,6 +193,11 @@ async function send(){
           const lastUser=[...S.messages].reverse().find(m=>m.role==='user');
           if(lastUser)lastUser.attachments=uploaded;
         }
+        // P5: attach usage data to the assistant message that just completed
+        const pendingIdx = S._pendingAsstMsgIdx;
+        if(pendingIdx !== undefined && S.messages[pendingIdx] && S.messages[pendingIdx].role === 'assistant'){
+          S.messages[pendingIdx]._usage = d.usage || null;
+        }
         clearLiveToolCards();
         clearLiveThinkingBuffer();
         // Restore model chip from auto-routing or session default
@@ -186,7 +211,7 @@ async function send(){
             _chip.textContent=_sm||'Model';
           }
         }
-        syncTopbar();renderMessages();loadDir('.');
+        syncTopbar();renderMessages();loadDir('.');  // P3: fire-and-forget — don't block render pipeline
       }
       renderSessionList();setBusy(false);setStatus('');
     });

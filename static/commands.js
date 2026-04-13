@@ -9,6 +9,13 @@ const COMMANDS=[
   {name:'workspace', desc:'Switch workspace by name',            fn:cmdWorkspace, arg:'name'},
   {name:'new',       desc:'Start a new chat session',            fn:cmdNew},
   {name:'usage',     desc:'Toggle token usage display on/off',   fn:cmdUsage},
+  // P6: ZenOps quick commands
+  {name:'zenops',    desc:'ZenOps ops: status|deploy|log|restart', fn:cmdZenops, arg:'subcommand'},
+  {name:'hunter',    desc:'Delegate to Hunter agent',            fn:cmdHunter,    arg:'task'},
+  {name:'trader',    desc:'Check Trader status or signal',       fn:cmdTrader,    arg:'args'},
+  {name:'sentinel',   desc:'Check Sentinel scan status',        fn:cmdSentinel,   arg:'args'},
+  {name:'scribe',    desc:'Delegate to Scribe agent',            fn:cmdScribe,     arg:'task'},
+  {name:'branch',    desc:'Branch conversation to compare A vs B', fn:cmdBranch},
 ];
 
 function parseCommand(text){
@@ -110,6 +117,132 @@ async function cmdUsage(){
   if(cb) cb.checked=next;
   renderMessages();
   showToast('Token usage '+(next?'on':'off'));
+}
+
+// ── P6: ZenOps quick commands ───────────────────────────────────────────────
+
+async function cmdZenops(args){
+  const sub=(args||'').trim().toLowerCase();
+  setStatus('Running /zenops '+sub+'...');
+  let result, ok=false;
+  try{
+    const data=await api('/api/zenops/exec',{
+      method:'POST',
+      body:JSON.stringify({cmd:sub,args:args})
+    });
+    result=data.result||JSON.stringify(data);
+    ok=data.ok;
+  }catch(e){
+    result='Error: '+e.message;
+  }
+  setStatus('');
+  const icon=ok?'✅':'❌';
+  S.messages.push({role:'assistant',content:`**${icon} /zenops ${sub}**\n\`\`\`\n${result.slice(0,2000)}\n\`\`\`\n`});
+  renderMessages();
+  showToast('/zenops '+(ok?'completed':'failed'));
+}
+
+async function cmdHunter(args){
+  if(!args.trim()){showToast('Usage: /hunter <task>');return;}
+  setStatus('Delegating to Hunter...');
+  try{
+    const data=await api('/api/zenops/exec',{
+      method:'POST',
+      body:JSON.stringify({cmd:'hunter',args})
+    });
+    const icon=data.ok?'✅':'❌';
+    S.messages.push({role:'assistant',content:`**${icon} Hunter**\n\`\`\`\n${(data.result||'').slice(0,2000)}\n\`\`\`\n`});
+    renderMessages();
+    showToast(data.ok?'Delegated to Hunter':'Hunter error');
+  }catch(e){
+    S.messages.push({role:'assistant',content:`**❌ Hunter delegation failed:** ${e.message}`});
+    renderMessages();
+  }
+  setStatus('');
+}
+
+async function cmdTrader(args){
+  setStatus('Checking Trader...');
+  try{
+    const data=await api('/api/zenops/exec',{
+      method:'POST',
+      body:JSON.stringify({cmd:'trader',args})
+    });
+    const icon=data.ok?'✅':'❌';
+    S.messages.push({role:'assistant',content:`**${icon} Trader**\n\`\`\`\n${(data.result||'').slice(0,2000)}\n\`\`\`\n`});
+    renderMessages();
+    showToast(data.ok?'Trader status retrieved':'Trader error');
+  }catch(e){
+    S.messages.push({role:'assistant',content:`**❌ Trader check failed:** ${e.message}`});
+    renderMessages();
+  }
+  setStatus('');
+}
+
+async function cmdSentinel(args){
+  setStatus('Checking Sentinel...');
+  try{
+    const data=await api('/api/zenops/exec',{
+      method:'POST',
+      body:JSON.stringify({cmd:'sentinel',args})
+    });
+    const icon=data.ok?'✅':'❌';
+    S.messages.push({role:'assistant',content:`**${icon} Sentinel**\n\`\`\`\n${(data.result||'').slice(0,2000)}\n\`\`\`\n`});
+    renderMessages();
+    showToast(data.ok?'Sentinel status retrieved':'Sentinel error');
+  }catch(e){
+    S.messages.push({role:'assistant',content:`**❌ Sentinel check failed:** ${e.message}`});
+    renderMessages();
+  }
+  setStatus('');
+}
+
+async function cmdScribe(args){
+  if(!args.trim()){showToast('Usage: /scribe <task>');return;}
+  setStatus('Delegating to Scribe...');
+  try{
+    const data=await api('/api/zenops/exec',{
+      method:'POST',
+      body:JSON.stringify({cmd:'scribe',args})
+    });
+    const icon=data.ok?'✅':'❌';
+    S.messages.push({role:'assistant',content:`**${icon} Scribe**\n\`\`\`\n${(data.result||'').slice(0,2000)}\n\`\`\`\n`});
+    renderMessages();
+    showToast(data.ok?'Delegated to Scribe':'Scribe error');
+  }catch(e){
+    S.messages.push({role:'assistant',content:`**❌ Scribe delegation failed:** ${e.message}`});
+    renderMessages();
+  }
+  setStatus('');
+}
+
+// P6/B3: Conversation branching
+async function cmdBranch(){
+  if(!S.session){showToast('No active session to branch');return;}
+  const parentSid=S.session.session_id;
+  // Find the last user message index as the branch point
+  let branchIdx=S.messages.length;
+  for(let i=S.messages.length-1;i>=0;i--){
+    if(S.messages[i].role==='user'){branchIdx=i+1;break;}
+  }
+  try{
+    const data=await api('/api/session/branch',{
+      method:'POST',
+      body:JSON.stringify({session_id:parentSid,branch_index:branchIdx})
+    });
+    if(data.session){
+      await newSession();
+      S.session=data.session;
+      S.messages=data.session.messages||[];
+      localStorage.setItem('hermes-webui-session',S.session.session_id);
+      syncTopbar();renderMessages();
+      showToast('Branched from session "'+(S.session.title||'Untitled')+'"');
+    } else {
+      showToast('Branch failed: '+JSON.stringify(data));
+    }
+  }catch(e){
+    showToast('Branch failed: '+e.message);
+  }
 }
 
 // ── Autocomplete dropdown ───────────────────────────────────────────────────

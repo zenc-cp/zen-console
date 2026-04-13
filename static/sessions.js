@@ -21,7 +21,7 @@ async function newSession(flash){
   S.session=data.session;S.messages=data.session.messages||[];
   if(flash)S.session._flash=true;
   localStorage.setItem('hermes-webui-session',S.session.session_id);
-  syncTopbar();await loadDir('.');renderMessages();
+  syncTopbar();loadDir('.');renderMessages();  // P3: fire-and-forget — don't block render pipeline
   // don't call renderSessionList here - callers do it when needed
 }
 
@@ -44,13 +44,19 @@ async function loadSession(sid){
     for(const tc of (S.toolCalls||[])){
       if(tc&&tc.name) appendLiveToolCard(tc);
     }
-    syncTopbar();await loadDir('.');renderMessages();appendThinking();
+    syncTopbar();loadDir('.');renderMessages();appendThinking();  // P3: fire-and-forget
     setBusy(true);setStatus('Hermes is thinking\u2026');
     startApprovalPolling(sid);
   }else{
     MSG_QUEUE.length=0;updateQueueBadge();  // clear queue for the viewed session
     S.messages=data.session.messages||[];
     S.toolCalls=(data.session.tool_calls||[]).map(tc=>({...tc,done:true}));
+    // P5: attach session-level usage to the last assistant message for display
+    const u=data.session;
+    if(u&&(u.input_tokens||u.output_tokens||u.estimated_cost)&&S.messages.length){
+      const lastAsst=[...S.messages].reverse().find(m=>m.role==='assistant');
+      if(lastAsst) lastAsst._usage={input_tokens:u.input_tokens||0,output_tokens:u.output_tokens||0,estimated_cost:u.estimated_cost};
+    }
     // Reset per-session visual state: the viewed session is idle even if another
     // session's stream is still running in the background.
     // We directly update the DOM instead of calling setBusy(false), because
@@ -63,7 +69,7 @@ async function loadSession(sid){
     const _cb=$('btnCancel');if(_cb)_cb.style.display='none';
     setStatus('');
     clearLiveToolCards();
-    syncTopbar();await loadDir('.');renderMessages();highlightCode();
+    syncTopbar();loadDir('.');renderMessages();highlightCode();  // P3: fire-and-forget
   }
 }
 

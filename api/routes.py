@@ -337,6 +337,19 @@ def handle_get(handler, parsed):
 def handle_post(handler, parsed):
     """Handle all POST routes. Returns True if handled, False for 404."""
 
+    # P6: ZenOps quick commands
+    if parsed.path == '/api/zenops/exec':
+        body = read_body(handler)
+        cmd = body.get('cmd', '') if body else ''
+        args = body.get('args', '') if body else ''
+        result, ok = _run_zenops_cmd(cmd, args)
+        return j(handler, {'ok': ok, 'result': result})
+
+    # B3: Session branching
+    if parsed.path == '/api/session/branch':
+        body = read_body(handler)
+        return _handle_session_branch(handler, body)
+
     if parsed.path == '/api/upload':
         return handle_upload(handler)
 
@@ -1358,3 +1371,98 @@ def _handle_session_import(handler, body):
             SESSIONS.popitem(last=False)
     s.save()
     return j(handler, {'ok': True, 'session': s.compact() | {'messages': s.messages}})
+
+# ── P6/B3: ZenOps exec + session branch helpers ─────────────────────────────
+
+def _run_zenops_cmd(cmd, args):
+    """Execute a ZenOps CLI command on the VM. Returns (output, ok)."""
+    import subprocess, json as _json
+    from datetime import datetime
+
+    cmd = cmd.strip().lower()
+    HOME = os.environ.get('HOME', '/home/slimslimchan')
+
+    if cmd == 'status':
+        try:
+            import urllib.request
+            req = urllib.request.Request('http://127.0.0.1:8090/api/status',
+                headers={'Accept': 'application/json'})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                data = _json.loads(r.read())
+            lines = [f"**Conductor:** {data.get('conductor','unknown')}",
+                     f"**Board:** {data.get('board','unknown')}"]
+            return '\n'.join(lines), True
+        except Exception as e:
+            return f'Board API error: {e}', False
+
+    if cmd == 'deploy':
+        gh = 'gh workflow run "Run Remote Command" --repo zenc-cp/claw-stack-jp --ref main'
+        c = f"command=cd ~/claw && git pull origin main && sudo systemctl restart conductor-v2 claw-board"
+        try:
+            r = subprocess.run(f"{gh} -f '{c}'", shell=True, capture_output=True, text=True, timeout=15)
+            return (r.stdout + r.stderr).strip()[:500], r.returncode == 0
+        except Exception as e:
+            return str(e), False
+
+    if cmd == 'restart':
+        try:
+            r = subprocess.run('sudo systemctl restart conductor-v2 claw-board',
+                               shell=True, capture_output=True, text=True, timeout=10)
+            return r.stderr.strip() or 'Restarted.', r.returncode == 0
+        except Exception as e:
+            return str(e), False
+
+    if cmd == 'log':
+        try:
+            r = subprocess.run('sudo journalctl -u conductor-v2 -n 20 --no-pager',
+                               shell=True, capture_output=True, text=True, timeout=5)
+            return r.stdout or r.stderr, r.returncode == 0
+        except Exception as e:
+            return str(e), False
+
+    if cmd in ('hunter', 'trader', 'sentinel', 'scribe'):
+        inbox_path = os.path.join(HOME, 'claw', 'data', 'brain-inbox.jsonl')
+        task = _json.dumps({
+            'agent': cmd, 'task': args or '', 'source': 'hermes-console',
+            'ts': datetime.utcnow().isoformat()
+        }) + '\n'
+        try:
+            with open(inbox_path, 'a') as f:
+                f.write(task)
+            return f'Task queued for {cmd}', True
+        except Exception as e:
+            return f'Failed to write inbox: {e}', False
+
+    return f'Unknown /zenops command: {cmd}. Try: status|deploy|restart|log', False
+
+
+def _handle_session_branch(handler, body):
+    """Create a new session branched from a parent at a given message index."""
+    import api.models as _mod
+    from api.models import Session
+
+    sid = body.get('session_id')
+    branch_idx = body.get('branch_index')
+    if not sid:
+        return bad(handler, 'session_id required')
+    if branch_idx is None:
+        return bad(handler, 'branch_index required')
+
+    parent = _mod.get_session(sid)
+    if not parent:
+        return bad(handler, 'session not found')
+
+    msgs = list(parent.messages[:branch_idx])
+    new_s = Session(
+        title=(parent.title or 'Untitled') + ' (branch)',
+        workspace=parent.workspace,
+        model=parent.model,
+        messages=msgs,
+    )
+    new_s._parent = sid
+    new_s._branch_index = branch_idx
+    with _mod.LOCK:
+        _mod.SESSIONS[new_s.session_id] = new_s
+    new_s.save()
+    _mod._invalidate_index_cache()
+    return j(handler, {'ok': True, 'session': new_s.compact() | {'messages': new_s.messages}})

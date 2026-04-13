@@ -394,6 +394,14 @@ function msgContent(m){
 
 function renderMessages(){
   const inner=$('msgInner');
+  // P7: During live SSE streaming, skip full DOM rebuild — the SSE handler
+  // (messages.js) updates the assistant row directly per token.
+  // Only the 'done' event (post-stream) should trigger a full rebuild.
+  if(S.busy){
+    // P7: Ensure the streaming assistant row exists (user may have sent message while idle)
+    // but don't rebuild the whole message list.
+    return;
+  }
   const vis=S.messages.filter(m=>{
     if(!m||!m.role||m.role==='tool')return false;
     return msgContent(m)||m.attachments?.length;
@@ -488,26 +496,41 @@ function renderMessages(){
       else inner.appendChild(frag);
     }
   }
-  // Render usage badge on the last assistant message row (if enabled and usage data exists)
-  if(window._showTokenUsage&&S.session&&(S.session.input_tokens||S.session.output_tokens)){
-    const rows=inner.querySelectorAll('.msg-row');
-    let lastAssist=null;
-    for(let i=rows.length-1;i>=0;i--){if(rows[i].dataset.role==='assistant'){lastAssist=rows[i];break;}}
-    if(lastAssist&&!lastAssist.querySelector('.msg-usage')){
+  // P5: Render usage badge on any assistant message with _usage data (not just the last one)
+  if(window._showTokenUsage){
+    const rows=inner.querySelectorAll('.msg-row[data-msg-idx]');
+    for(const row of rows){
+      const idx=parseInt(row.dataset.msgIdx||'-1',10);
+      const msg=S.messages[idx];
+      if(!msg||msg.role!=='assistant'||!msg._usage) continue;
+      if(row.querySelector('.msg-usage')) continue;
+      const u=msg._usage;
+      if(!u||(!u.input_tokens&&!u.output_tokens)) continue;
       const usage=document.createElement('div');
       usage.className='msg-usage';
-      const inTok=S.session.input_tokens||0;
-      const outTok=S.session.output_tokens||0;
-      const cost=S.session.estimated_cost;
+      const inTok=u.input_tokens||0;
+      const outTok=u.output_tokens||0;
+      const cost=u.estimated_cost;
       let text=`${_fmtTokens(inTok)} in · ${_fmtTokens(outTok)} out`;
       if(cost) text+=` · ~$${cost<0.01?cost.toFixed(4):cost.toFixed(2)}`;
       usage.textContent=text;
-      lastAssist.appendChild(usage);
+      row.appendChild(usage);
     }
   }
   scrollToBottom();
-  // Apply syntax highlighting after DOM is built
-  requestAnimationFrame(()=>{highlightCode();addCopyButtons();renderMermaidBlocks();});
+  // P2: Only highlight code blocks that haven't been highlighted yet (avoids full-tree re-render)
+  // Mark highlighted code elements with data-highlighted to skip on subsequent calls
+  requestAnimationFrame(()=>{
+    if(typeof Prism !== 'undefined' && Prism.highlightAllUnder){
+      const el=$('msgInner');
+      if(el) el.querySelectorAll('pre > code:not([data-highlighted])').forEach(codeEl=>{
+        Prism.highlightElement(codeEl);
+        codeEl.setAttribute('data-highlighted','1');
+      });
+    }
+    addCopyButtons();
+    renderMermaidBlocks();
+  });
   // Refresh todo panel if it's currently open
   if(typeof loadTodos==='function' && document.getElementById('panelTodos') && document.getElementById('panelTodos').classList.contains('active')){
     loadTodos();
@@ -688,11 +711,14 @@ async function regenerateResponse(btn) {
 }
 
 function highlightCode(container) {
-  // Apply Prism.js syntax highlighting to all code blocks in container (or whole messages area)
+  // P2: Only highlight code blocks not yet highlighted — avoids O(n) re-highlight on every render
   if(typeof Prism === 'undefined' || !Prism.highlightAllUnder) return;
   const el = container || $('msgInner');
   if(!el) return;
-  Prism.highlightAllUnder(el);
+  el.querySelectorAll('pre > code:not([data-highlighted])').forEach(codeEl=>{
+    Prism.highlightElement(codeEl);
+    codeEl.setAttribute('data-highlighted','1');
+  });
 }
 
 function addCopyButtons(container){
