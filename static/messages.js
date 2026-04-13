@@ -1,3 +1,5 @@
+const DEFAULT_MODEL='openrouter/minimax/minimax-m2.7';
+
 async function send(){
   const text=$('msg').value.trim();
   if(!text&&!S.pendingFiles.length)return;
@@ -59,14 +61,21 @@ async function send(){
   // Start the agent via POST, get a stream_id back
   let streamId;
   try{
+    // Only send explicit model if user changed it from session default (auto router activates when absent)
     const startData=await api('/api/chat/start',{method:'POST',body:JSON.stringify({
       session_id:activeSid,message:msgText,
-      model:S.session.model||$('modelSelect').value,workspace:S.session.workspace,
+      model:S.session.model&&S.session.model!==DEFAULT_MODEL?S.session.model:undefined,
+      workspace:S.session.workspace,
       attachments:uploaded.length?uploaded:undefined
     })});
     streamId=startData.stream_id;
     S.activeStreamId = streamId;
     markInflight(activeSid, streamId);
+    // If auto-routed, update model chip to show selected tier
+    const _mchip=$('modelChip');
+    if(_mchip&&startData.auto_routed&&startData.model_tier){
+      _mchip.textContent='Auto: '+startData.model_tier.charAt(0).toUpperCase()+startData.model_tier.slice(1);
+    }
     // Show Cancel button
     const cancelBtn=$('btnCancel');
     if(cancelBtn) cancelBtn.style.display='';
@@ -127,6 +136,13 @@ async function send(){
       scrollIfPinned();
     });
 
+    source.addEventListener('thinking',e=>{
+      if(!S.session||S.session.session_id!==activeSid) return;
+      const d=JSON.parse(e.data);
+      appendThinkingLive(d.text||'');
+      scrollIfPinned();
+    });
+
     source.addEventListener('approval',e=>{
       const d=JSON.parse(e.data);
       d._session_id=activeSid;
@@ -140,13 +156,11 @@ async function send(){
       clearInflight();
       stopApprovalPolling();
       if(!_approvalSessionId || _approvalSessionId===activeSid) hideApprovalCard();
+      S.busy=false;  // R13: must precede renderMessages()
       if(S.session&&S.session.session_id===activeSid){
         S.activeStreamId=null;
         const _cb=$('btnCancel');if(_cb)_cb.style.display='none';
-      }
-      if(S.session&&S.session.session_id===activeSid){
         S.session=d.session;S.messages=d.session.messages||[];
-        // Stamp _ts on the last assistant message if it has no timestamp
         const lastAsst=[...S.messages].reverse().find(m=>m.role==='assistant');
         if(lastAsst&&!lastAsst._ts&&!lastAsst.timestamp) lastAsst._ts=Date.now()/1000;
         if(d.usage) S.lastUsage=d.usage;
@@ -160,10 +174,28 @@ async function send(){
           if(lastUser)lastUser.attachments=uploaded;
         }
         clearLiveToolCards();
-        S.busy=false;
+        clearLiveThinkingBuffer();
+        // Restore model chip from auto-routing or session default
+        const _chip=$('modelChip');
+        if(_chip&&d.session&&d.session.model){
+          const _tier=startData?.model_tier;
+          if(_tier){
+            _chip.textContent=_tier.charAt(0).toUpperCase()+_tier.slice(1);
+          } else {
+            const _sm=d.session.model.split('/').pop();
+            _chip.textContent=_sm||'Model';
+          }
+        }
         syncTopbar();renderMessages();loadDir('.');
       }
       renderSessionList();setBusy(false);setStatus('');
+    });
+
+    source.addEventListener('thinking',e=>{
+      if(!S.session||S.session.session_id!==activeSid) return;
+      const d=JSON.parse(e.data);
+      appendThinkingLive(d.text||'');
+      scrollIfPinned();
     });
 
     source.addEventListener('apperror',e=>{

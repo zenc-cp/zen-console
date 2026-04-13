@@ -775,6 +775,30 @@ function appendThinking(){
 }
 function removeThinking(){const el=$('thinkingRow');if(el)el.remove();}
 
+// Live thinking card: shows thinking text in real-time during SSE stream
+let _liveThinkingBuffer='';
+function appendThinkingLive(text){
+  $('emptyState').style.display='none';
+  // Find or create the thinking row
+  let row=$('thinkingRow');
+  if(!row){
+    row=document.createElement('div');row.className='msg-row';row.id='thinkingRow';
+    row.innerHTML=`<div class="msg-role assistant"><div class="role-icon assistant">H</div>Hermes</div><div class="thinking" id="liveThinkingContent"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
+    $('msgInner').appendChild(row);
+  }
+  // Accumulate thinking text
+  _liveThinkingBuffer+=text;
+  const content=$('liveThinkingContent');
+  if(content){
+    // Show thinking text inline with animated dots, or just dots if no text yet
+    content.innerHTML=_liveThinkingBuffer
+      ? `<div style="font-size:11px;color:var(--muted);line-height:1.5;max-height:120px;overflow-y:auto;margin-bottom:4px">${esc(_liveThinkingBuffer.slice(-400))}</div><div class="dot"></div><div class="dot"></div><div class="dot"></div>`
+      : `<div class="dot"></div><div class="dot"></div><div class="dot"></div>`;
+  }
+  scrollToBottom();
+}
+function clearLiveThinkingBuffer(){_liveThinkingBuffer='';}
+
 function fileIcon(name, type){
   if(type==='dir') return '📁';
   const e=fileExt(name);

@@ -925,7 +925,19 @@ def _handle_chat_start(handler, body):
     if not msg: return bad(handler, 'message is required')
     attachments = [str(a) for a in (body.get('attachments') or [])][:20]
     workspace = str(Path(body.get('workspace') or s.workspace).expanduser().resolve())
-    model = body.get('model') or s.model
+
+    # Auto model router: if no explicit model was chosen, classify intent and pick best
+    explicit_model = body.get('model')
+    auto_routed = False
+    if not explicit_model:
+        from api.model_router import auto_model_for, get_tier_for_model
+        has_image = any(a.lower().endswith(('.png','jpg','jpeg','gif','webp','svg','bmp'))
+                        for a in attachments)
+        model = auto_model_for(msg, has_attachment=has_image)
+        auto_routed = (model != s.model)  # only flag if different from session default
+    else:
+        model = explicit_model
+
     s.workspace = workspace; s.model = model; s.save()
     set_last_workspace(workspace)
     stream_id = uuid.uuid4().hex
@@ -937,7 +949,15 @@ def _handle_chat_start(handler, body):
         daemon=True,
     )
     thr.start()
-    return j(handler, {'stream_id': stream_id, 'session_id': s.session_id})
+    from api.model_router import get_tier_for_model
+    tier_label = get_tier_for_model(model)
+    return j(handler, {
+        'stream_id': stream_id,
+        'session_id': s.session_id,
+        'auto_routed': auto_routed,
+        'model_tier': tier_label,
+        'model': model,
+    })
 
 
 def _handle_chat_sync(handler, body):
