@@ -13,6 +13,7 @@ async function newSession(flash){
   MSG_QUEUE.length=0;updateQueueBadge();
   S.toolCalls=[];
   clearLiveToolCards();
+  if(window._stopWorkspaceWatch) window._stopWorkspaceWatch();  // B4: stop old watch
   // Use profile default workspace for new sessions after a profile switch (one-shot),
   // otherwise inherit from the current session (or let server pick the default)
   const inheritWs=S._profileDefaultWorkspace||(S.session?S.session.workspace:null);
@@ -27,6 +28,8 @@ async function newSession(flash){
 
 async function loadSession(sid){
   stopApprovalPolling();hideApprovalCard();
+  // B4: stop workspace watcher when switching sessions
+  if(window._stopWorkspaceWatch) window._stopWorkspaceWatch();
   const data=await api(`/api/session?session_id=${encodeURIComponent(sid)}`);
   S.session=data.session;
   localStorage.setItem('hermes-webui-session',S.session.session_id);
@@ -70,6 +73,8 @@ async function loadSession(sid){
     setStatus('');
     clearLiveToolCards();
     syncTopbar();loadDir('.');renderMessages();highlightCode();  // P3: fire-and-forget
+    // B4: start workspace watcher for this session's workspace
+    if(window._startWorkspaceWatch && S.session) window._startWorkspaceWatch(S.session.workspace);
   }
 }
 

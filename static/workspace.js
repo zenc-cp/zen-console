@@ -30,6 +30,49 @@ function _restoreExpandedDirs(){
   }catch(e){S._expandedDirs=new Set();}
 }
 
+// B4: Workspace file watcher — EventSource subscription for live file tree updates
+let _watchES = null;
+let _watchDebounce = null;
+
+function startWorkspaceWatch(workspace){
+  stopWorkspaceWatch();  // clean up any existing watch
+  if(!workspace || workspace === '.') return;
+  const prefix = (location.pathname.match(/^\/[^\/]+/) || [''])[0];
+  const url = prefix + `/api/workspace-watch?workspace=${encodeURIComponent(workspace)}`;
+  _watchES = new EventSource(url);
+  _watchES.addEventListener('fs-event', e => {
+    // Debounce: only reload after 500ms of silence (aggregates rapid changes)
+    clearTimeout(_watchDebounce);
+    _watchDebounce = setTimeout(() => {
+      // Invalidate dir cache so next loadDir fetches fresh data
+      if(S._dirCache) S._dirCache = {};
+      loadDir('.');
+      // Show "+N new files" badge on workspace tab
+      const tab = document.querySelector('.sidebar-tab[data-tab="files"]');
+      if(tab) {
+        tab.classList.add('zs-new-files');
+        const badge = tab.querySelector('.tab-badge') || (() => {
+          const b = document.createElement('span'); b.className = 'tab-badge'; tab.appendChild(b); return b;
+        })();
+        badge.textContent = '●';
+      }
+    }, 500);
+  });
+  _watchES.onerror = () => { stopWorkspaceWatch(); };
+}
+
+function stopWorkspaceWatch(){
+  if(_watchES){ _watchES.close(); _watchES = null; }
+  clearTimeout(_watchDebounce);
+  const tab = document.querySelector('.sidebar-tab[data-tab="files"]');
+  if(tab) tab.classList.remove('zs-new-files');
+}
+
+// B4: Call startWorkspaceWatch when session done event fires (wired from messages.js done handler)
+// Also called when workspace changes.
+window._startWorkspaceWatch = startWorkspaceWatch;
+window._stopWorkspaceWatch = stopWorkspaceWatch;
+
 async function loadDir(path){
   if(!S.session)return;
   try{

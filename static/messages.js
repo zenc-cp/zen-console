@@ -212,6 +212,22 @@ async function send(){
           }
         }
         syncTopbar();renderMessages();loadDir('.');  // P3: fire-and-forget — don't block render pipeline
+        // B4: start workspace file watcher after session done
+        if(window._startWorkspaceWatch && S.session) window._startWorkspaceWatch(S.session.workspace);
+        // B5: auto-summary — if session is still Untitled and has 5+ messages, summarize it
+        if(S.session && S.session.title === 'Untitled' && S.messages.length >= 5){
+          const sid = S.session.session_id;
+          api('/api/session/summarize', {method:'POST', body:JSON.stringify({session_id:sid})})
+            .then(data => {
+              if(data.ok && data.title && data.title !== 'Untitled'){
+                S.session.title = data.title;
+                // Update the session list item title in the sidebar without a full re-render
+                const item = document.querySelector(`.session-item[data-sid="${sid}"] .session-title`);
+                if(item) item.textContent = data.title;
+                renderSessionList();  // refresh sidebar
+              }
+            }).catch(() => {});  // best-effort
+        }
       }
       renderSessionList();setBusy(false);setStatus('');
     });

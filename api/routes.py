@@ -214,6 +214,10 @@ def handle_get(handler, parsed):
     if parsed.path == '/api/list':
         return _handle_list_dir(handler, parsed)
 
+    # B4: Workspace file watch SSE stream
+    if parsed.path == '/api/workspace-watch':
+        return _handle_workspace_watch(handler, parsed)
+
     if parsed.path == '/api/chat/stream/status':
         stream_id = parse_qs(parsed.query).get('stream_id', [''])[0]
         return j(handler, {'active': stream_id in STREAMS, 'stream_id': stream_id})
@@ -349,6 +353,16 @@ def handle_post(handler, parsed):
     if parsed.path == '/api/session/branch':
         body = read_body(handler)
         return _handle_session_branch(handler, body)
+
+    # B5: Auto-summary — generate LLM summary of session messages
+    if parsed.path == '/api/session/summarize':
+        body = read_body(handler)
+        return _handle_session_summarize(handler, body)
+
+    # B6: Skill evolution — list + trigger zen_evolve for a skill
+    if parsed.path == '/api/skills/evolve':
+        body = read_body(handler)
+        return _handle_skill_evolve(handler, body)
 
     if parsed.path == '/api/upload':
         return handle_upload(handler)
@@ -753,6 +767,81 @@ def _handle_sessions_search(handler, parsed):
             except (KeyError, Exception):
                 pass
     return j(handler, {'sessions': results, 'query': q, 'count': len(results)})
+
+
+# B4: Workspace file watcher — SSE stream of filesystem change events
+_WATCH_THREADS = {}  # stream_id -> threading.Thread
+
+def _watch_workspace(watch_id, workspace, q):
+    """Poll workspace for file changes every 2s using mtime fingerprints."""
+    import time
+    _mtimes = {}
+    def _scan(root):
+        changes = []
+        try:
+            for p in Path(root).rglob('*'):
+                if p.is_file() and not p.name.startswith('.'):
+                    try:
+                        m = p.stat().st_mtime
+                        rel = str(p.relative_to(Path(root)))
+                        key = rel
+                        if key not in _mtimes or _mtimes[key] != m:
+                            changes.append(('modified', rel))
+                        _mtimes[key] = m
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+        return changes
+
+    while True:
+        try:
+            changes = _scan(workspace)
+            for event_type, path in changes:
+                q.put(('fs-event', json.dumps({'type': event_type, 'path': path, 'watch': watch_id})))
+                time.sleep(0.05)  # small delay between events
+            time.sleep(2)
+        except Exception:
+            break
+
+
+def _handle_workspace_watch(handler, parsed):
+    """GET /api/workspace-watch?workspace=<path> — SSE stream of file change events."""
+    qs = parse_qs(parsed.query)
+    workspace = qs.get('workspace', [''])[0]
+    if not workspace:
+        return bad(handler, 'workspace query param required')
+
+    stream_id = uuid.uuid4().hex
+    q = queue.Queue()
+    with STREAMS_LOCK:
+        STREAMS[stream_id] = q
+
+    thr = threading.Thread(target=_watch_workspace, args=(stream_id, workspace, q), daemon=True)
+    thr.start()
+    _WATCH_THREADS[stream_id] = thr
+
+    # Inline SSE response — write directly to handler (stream_id not in original query)
+    handler.send_response(200)
+    handler.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+    handler.send_header('Cache-Control', 'no-cache')
+    handler.send_header('X-Accel-Buffering', 'no')
+    handler.send_header('Connection', 'keep-alive')
+    handler.end_headers()
+    try:
+        while True:
+            try:
+                event, data = q.get(timeout=30)
+            except queue.Empty:
+                handler.wfile.write(b': heartbeat\n\n')
+                handler.wfile.flush()
+                continue
+            _sse(handler, event, data)
+            if event in ('done', 'error'):
+                break
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    return True
 
 
 def _handle_list_dir(handler, parsed):
@@ -1466,3 +1555,179 @@ def _handle_session_branch(handler, body):
     new_s.save()
     _mod._invalidate_index_cache()
     return j(handler, {'ok': True, 'session': new_s.compact() | {'messages': new_s.messages}})
+
+
+# B5: Auto-summary — LLM summarization of session messages, title updated in-place
+def _handle_session_summarize(handler, body):
+    import api.models as _mod
+    from api.models import Session
+
+    sid = body.get('session_id')
+    if not sid:
+        return bad(handler, 'session_id required')
+
+    session = _mod.get_session(sid)
+    if not session:
+        return bad(handler, 'session not found')
+
+    msgs = session.messages
+    if not msgs:
+        return j(handler, {'ok': False, 'error': 'no messages to summarize'})
+
+    # Build a compact prompt from the last N user/assistant exchanges
+    context_msgs = msgs[-(20 if len(msgs) > 20 else len(msgs)):]
+    prompt_parts = [
+        f"Session has {len(msgs)} messages.",
+        "Recent messages:\n",
+    ]
+    for m in context_msgs:
+        role = m.get('role', '?')
+        content = m.get('content', '')
+        if isinstance(content, list):
+            content = ' '.join(p.get('text', '') for p in content if p.get('type') == 'text')
+        content = str(content)[:300]
+        prompt_parts.append(f"[{role}] {content}")
+
+    prompt = (
+        "You are summarizing a Hermès AI assistant session. "
+        "Produce a short, descriptive title (max 60 chars, no quotes) "
+        "and a one-line summary (max 120 chars).\n\n"
+        + '\n'.join(prompt_parts)
+        + "\n\nTitle: "
+    )
+
+    # Try OpenRouter for summarization (fast cheap model)
+    summary_title = None
+    summary_text = None
+    try:
+        import urllib.request
+        payload = {
+            'model': 'anthropic/claude-3-haiku',
+            'messages': [{'role': 'user', 'content': prompt}],
+            'max_tokens': 80,
+            'temperature': 0.3,
+        }
+        req = urllib.request.Request(
+            'https://openrouter.ai/api/v1/chat/completions',
+            data=_json.dumps(payload).encode(),
+            headers={
+                'Authorization': f'Bearer {os.environ.get("OPENROUTER_API_KEY", "")}',
+                'Content-Type': 'application/json',
+            },
+            method='POST',
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = _json.loads(resp.read())
+        choices = result.get('choices', [])
+        if choices:
+            text = choices[0].get('message', {}).get('content', '')
+            # Expect format: "Title: X\nSummary: Y"
+            lines = text.strip().split('\n')
+            if len(lines) >= 2:
+                summary_title = lines[0].replace('Title:', '').strip()[:60]
+                summary_text = lines[1].replace('Summary:', '').strip()[:120]
+            elif len(lines) == 1:
+                summary_title = lines[0].strip()[:60]
+    except Exception as e:
+        pass  # summarization is best-effort
+
+    # Fallback: first-user-message-derived title
+    if not summary_title:
+        first_user = next((m.get('content', '') for m in msgs if m.get('role') == 'user'), '')
+        if isinstance(first_user, list):
+            first_user = ' '.join(p.get('text', '') for p in first_user if p.get('type') == 'text')
+        summary_title = str(first_user)[:50].strip() or 'Untitled'
+
+    # Update session title
+    session.title = summary_title
+    session.save()
+    _mod._invalidate_index_cache()
+
+    return j(handler, {
+        'ok': True,
+        'title': summary_title,
+        'summary': summary_text or '',
+    })
+
+
+# B6: Skill evolution — list skills from zeroclaw-skills + claw/zeroclaw-skills + ~/.hermes/skills
+def _handle_skill_evolve(handler, body):
+    """POST /api/skills/evolve — run zen_evolve on a skill and return updated docs."""
+    import subprocess
+
+    skill_name = body.get('skill_name', '').strip()
+    action = body.get('action', 'list')  # 'list' | 'evolve' | 'review'
+
+    HERMES_SKILLS = os.path.join(os.environ.get('HOME', '/home/slimslimchan'), '.hermes', 'skills')
+    ZEN_SKILLS_CLI = os.path.join(os.environ.get('HOME', '/home/slimslimchan'), 'claw', 'zeroclaw-skills')
+
+    def _list_skills():
+        skills = []
+        for base in (HERMES_SKILLS, ZEN_SKILLS_CLI):
+            if not os.path.isdir(base):
+                continue
+            for name in os.listdir(base):
+                skill_dir = os.path.join(base, name)
+                if not os.path.isdir(skill_dir):
+                    continue
+                readme = os.path.join(skill_dir, 'SKILL.md')
+                desc = ''
+                if os.path.exists(readme):
+                    try:
+                        first = open(readme, encoding='utf-8').read(300)
+                        desc = first.split('\n')[0].lstrip('#').strip()
+                    except Exception:
+                        pass
+                skills.append({
+                    'name': name,
+                    'desc': desc,
+                    'path': skill_dir,
+                    'source': 'hermes' if HERMES_SKILLS in skill_dir else 'zenops',
+                    'evolvable': os.path.exists(os.path.join(skill_dir, 'references')) or
+                                 os.path.exists(os.path.join(skill_dir, 'templates')) or
+                                 os.path.exists(os.path.join(skill_dir, 'scripts')),
+                })
+        return skills
+
+    if action == 'list':
+        return j(handler, {'ok': True, 'skills': _list_skills()})
+
+    if action == 'evolve':
+        if not skill_name:
+            return bad(handler, 'skill_name required for evolve action')
+        # Try to run zen_evolve.py
+        evolve_script = os.path.join(os.environ.get('HOME', '/home/slimslimchan'),
+                                     'claw', 'conductor', 'lib', 'zen_evolve.py')
+        result_output = ''
+        try:
+            r = subprocess.run(
+                ['python3', evolve_script, '--skill', skill_name, '--yes'],
+                capture_output=True, text=True, timeout=60,
+                env={**os.environ, 'PYTHONPATH': os.path.dirname(evolve_script)}
+            )
+            result_output = (r.stdout + r.stderr)[:500]
+            ok = r.returncode == 0
+        except FileNotFoundError:
+            result_output = 'zen_evolve.py not found — skipping'
+            ok = False
+        except Exception as e:
+            result_output = str(e)
+            ok = False
+        return j(handler, {'ok': ok, 'skill_name': skill_name, 'result': result_output,
+                            'skills': _list_skills()})
+
+    if action == 'review':
+        if not skill_name:
+            return bad(handler, 'skill_name required for review action')
+        # Return the skill's current docs for review
+        skills = _list_skills()
+        skill = next((s for s in skills if s['name'] == skill_name), None)
+        if not skill:
+            return bad(handler, f'skill "{skill_name}" not found')
+        readme_path = os.path.join(skill['path'], 'SKILL.md')
+        content = ''
+        if os.path.exists(readme_path):
+            content = open(readme_path, encoding='utf-8').read()
+        return j(handler, {'ok': True, 'skill': skill, 'content': content})
+
+    return bad(handler, f'unknown action: {action}')

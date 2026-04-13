@@ -103,6 +103,12 @@
   .skill-item{padding:7px 10px;border-radius:7px;cursor:pointer;font-size:12px;color:var(--muted);display:flex;align-items:flex-start;gap:6px;transition:all .12s;line-height:1.4;}
   .skill-item:hover{background:rgba(255,255,255,.06);color:var(--text);}
   .skill-item.active{background:rgba(124,185,255,.1);color:var(--blue);}
+  /* B6: skill evolution panel */
+  .skill-item{display:flex;align-items:center;gap:4px;}
+  .skill-source-badge{flex-shrink:0;}
+  .skill-evo-btn{background:none;border:none;color:var(--muted);font-size:9px;cursor:pointer;padding:2px 4px;border-radius:4px;margin-left:auto;flex-shrink:0;transition:all .1s;}
+  .skill-evo-btn:hover{background:rgba(255,255,255,.1);color:var(--text);}
+  .skill-evo-btn:disabled{opacity:.4;cursor:not-allowed;}
   .skill-name{font-weight:500;flex-shrink:0;}
   .skill-desc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-size:11px;opacity:.7;}
   /* Memory panel */
@@ -141,6 +147,8 @@
   .zs-label{color:rgba(255,255,255,.5);font-size:10px;}
   .zs-value{color:rgba(255,255,255,.8);}
   .zs-sep{color:rgba(255,255,255,.15);}
+  /* B4: new files badge on workspace tab */
+  .tab-badge{font-size:9px;background:#22c55e;color:#fff;border-radius:50%;width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;margin-left:4px;line-height:1;}
   .chip.model{color:var(--blue);border-color:rgba(124,185,255,0.35);background:rgba(124,185,255,0.1);}
   .messages{flex:1;overflow-y:auto;display:flex;flex-direction:column;min-height:0;}
   .messages-inner{max-width:800px;margin:0 auto;width:100%;padding:20px 24px 32px;display:flex;flex-direction:column;}

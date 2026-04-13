@@ -358,7 +358,13 @@ async function loadSkills() {
   if (_skillsData) { renderSkills(_skillsData); return; }
   const box = $('skillsList');
   try {
-    const data = await api('/api/skills');
+    // B6: use /api/skills/evolve for richer skill data (source, evolvable flag)
+    let data;
+    try {
+      data = await api('/api/skills/evolve', {method:'POST', body:JSON.stringify({action:'list'})});
+    } catch {
+      data = await api('/api/skills');  // fallback to old endpoint
+    }
     _skillsData = data.skills || [];
     renderSkills(_skillsData);
   } catch(e) { box.innerHTML = `<div style="padding:12px;color:var(--accent);font-size:12px">Error: ${esc(e.message)}</div>`; }
@@ -381,14 +387,25 @@ function renderSkills(skills) {
   const box = $('skillsList');
   box.innerHTML = '';
   if (!filtered.length) { box.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">No skills match.</div>'; return; }
-  for (const [cat, items] of Object.entries(cats).sort()) {
+    for (const [cat, items] of Object.entries(cats).sort()) {
     const sec = document.createElement('div');
     sec.className = 'skills-category';
     sec.innerHTML = `<div class="skills-cat-header">&#128193; ${esc(cat)} <span style="opacity:.5">(${items.length})</span></div>`;
     for (const skill of items.sort((a,b) => a.name.localeCompare(b.name))) {
       const el = document.createElement('div');
       el.className = 'skill-item';
-      el.innerHTML = `<span class="skill-name">${esc(skill.name)}</span><span class="skill-desc">${esc(skill.description||'')}</span>`;
+      // B6: source badge + evolve button
+      const srcColor = skill.source === 'zenops' ? 'var(--green)' : 'var(--blue)';
+      const srcLabel = skill.source || 'unknown';
+      const evoBtn = skill.evolvable
+        ? `<button class="skill-evo-btn" title="Evolve ${skill.name}" onclick="event.stopPropagation();evolveSkill('${esc(skill.name)}',this)">&#9650; Evo</button>`
+        : '';
+      el.innerHTML = `
+        <span class="skill-source-badge" style="background:${srcColor};color:#fff;font-size:8px;font-weight:700;padding:1px 4px;border-radius:3px;flex-shrink:0">${esc(srcLabel)}</span>
+        <span class="skill-name">${esc(skill.name)}</span>
+        <span class="skill-desc">${esc(skill.description||'')}</span>
+        ${evoBtn}
+      `;
       el.onclick = () => openSkill(skill.name, el);
       sec.appendChild(el);
     }
@@ -398,6 +415,46 @@ function renderSkills(skills) {
 
 function filterSkills() {
   if (_skillsData) renderSkills(_skillsData);
+}
+
+// B6: Skill evolution — trigger evolve on a skill
+async function evolveSkill(name, btnEl) {
+  if(!confirm(`Run skill evolution for "${name}"?`)) return;
+  if(btnEl){ btnEl.textContent = '...'; btnEl.disabled = true; }
+  setStatus(`Evolving "${name}"...`);
+  try {
+    const data = await api('/api/skills/evolve', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'evolve', skill_name: name }),
+    });
+    setStatus('');
+    if(data.ok) {
+      showToast(`Evolved "${name}" successfully`);
+      // Refresh skills list
+      await loadSkillsPanel();
+    } else {
+      showToast(`Evolve failed: ${(data.result||'').slice(0,80)}`);
+    }
+  } catch(e) {
+    setStatus('');
+    showToast('Evolve error: ' + e.message);
+  } finally {
+    if(btnEl){ btnEl.textContent = '\u25B2 Evo'; btnEl.disabled = false; }
+  }
+}
+
+// Reload skills list (used after evolve)
+async function loadSkillsPanel() {
+  try {
+    const data = await api('/api/skills/evolve', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'list' }),
+    });
+    if(data.ok && data.skills) {
+      _skillsData = data.skills;
+      renderSkills(_skillsData);
+    }
+  } catch(e) {}
 }
 
 async function openSkill(name, el) {
