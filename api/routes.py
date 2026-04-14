@@ -904,19 +904,32 @@ def _handle_sse_stream(handler, parsed):
     handler.send_header('X-Accel-Buffering', 'no')
     handler.send_header('Connection', 'keep-alive')
     handler.end_headers()
+    # Background heartbeat thread — sends ping every 15s regardless of queue activity
+    # This prevents Cloudflare from terminating the connection (100s timeout)
+    _stream_done = threading.Event()
+    def _heartbeat():
+        while not _stream_done.is_set():
+            try:
+                handler.wfile.write(b': ping\n\n')
+                handler.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                break
+            _stream_done.wait(15)
+    hb = threading.Thread(target=_heartbeat, daemon=True)
+    hb.start()
     try:
         while True:
             try:
-                event, data = q.get(timeout=30)
+                event, data = q.get(timeout=20)
             except queue.Empty:
-                handler.wfile.write(b': heartbeat\n\n')
-                handler.wfile.flush()
-                continue
+                continue  # heartbeat thread handles keepalive
             _sse(handler, event, data)
             if event in ('done', 'error', 'cancel'):
                 break
     except (BrokenPipeError, ConnectionResetError):
         pass
+    finally:
+        _stream_done.set()
     return True
 
 
