@@ -134,6 +134,11 @@ function toggleTaskPanel() {
     taskPanelVisible = !taskPanelVisible;
     var panel = document.getElementById('taskListPanel');
     if (panel) panel.style.display = taskPanelVisible ? 'block' : 'none';
+    var btn = document.getElementById('btnBgTasks');
+    if (btn) {
+        btn.style.background = taskPanelVisible ? 'rgba(0,255,136,0.15)' : '';
+        btn.style.borderColor = taskPanelVisible ? '#00ff88' : '';
+    }
     if (taskPanelVisible) refreshTaskList();
 }
 
