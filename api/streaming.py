@@ -324,13 +324,32 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     print(f"[webui] memory: injected index.md ({len(_index_text)} chars)", flush=True)
             except Exception as _mem_err:
                 print(f"[webui] memory: index injection skipped ({_mem_err})", flush=True)
-            result = agent.run_conversation(
-                user_message=workspace_ctx + msg_text,
-                system_message=workspace_system_msg,
-                conversation_history=_trim_history(_sanitize_messages_for_api(s.messages)),
-                task_id=session_id,
-                persist_user_message=msg_text,
-            )
+            # Watchdog: kill agent if it takes >120s (prevents thread exhaustion)
+            _agent_timeout = 120
+            _agent_result = [None]
+            _agent_error = [None]
+            def _run_agent_inner():
+                try:
+                    _agent_result[0] = agent.run_conversation(
+                        user_message=workspace_ctx + msg_text,
+                        system_message=workspace_system_msg,
+                        conversation_history=_trim_history(_sanitize_messages_for_api(s.messages)),
+                        task_id=session_id,
+                        persist_user_message=msg_text,
+                    )
+                except Exception as e:
+                    _agent_error[0] = e
+            _inner_thr = threading.Thread(target=_run_agent_inner, daemon=True)
+            _inner_thr.start()
+            _inner_thr.join(timeout=_agent_timeout)
+            if _inner_thr.is_alive():
+                put('error', {'message': f'Agent timed out after {_agent_timeout}s. Try a different model or start a new session.'})
+                put('done', {'session': {'messages': s.messages}})
+                print(f'[webui] TIMEOUT: agent for {session_id} killed after {_agent_timeout}s', flush=True)
+                return
+            if _agent_error[0]:
+                raise _agent_error[0]
+            result = _agent_result[0]
             # ── Post-run hallucination scrub ───────────────────────
             _result_msgs = result.get('messages') or s.messages
             _hallucination_count = 0
