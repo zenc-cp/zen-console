@@ -62,8 +62,12 @@ def handle_task_cancel(handler, body) -> True:
     # Also set the cancel flag if the task has an active stream
     stream_id = f"bg_{task_id}"
     try:
-        from api.config import CANCEL_FLAGS
-        CANCEL_FLAGS[stream_id] = True
+        import threading
+        from api.config import CANCEL_FLAGS, STREAMS_LOCK
+        with STREAMS_LOCK:
+            if stream_id not in CANCEL_FLAGS or not isinstance(CANCEL_FLAGS.get(stream_id), threading.Event):
+                CANCEL_FLAGS[stream_id] = threading.Event()
+            CANCEL_FLAGS[stream_id].set()
     except Exception:
         pass
 

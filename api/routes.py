@@ -349,6 +349,15 @@ def handle_post(handler, parsed):
         result, ok = _run_zenops_cmd(cmd, args)
         return j(handler, {'ok': ok, 'result': result})
 
+    # ZenOps: Agent status
+    if parsed.path == '/api/zenops/status':
+        # Use exec cmd to get status from each agent
+        status = {}
+        for agent in ['hunter', 'trader', 'sentinel', 'scribe', 'brain']:
+            _, ok = _run_zenops_cmd(agent, '')
+            status[agent] = {'running': ok}
+        return j(handler, status)
+
     # B3: Session branching
     if parsed.path == '/api/session/branch':
         body = read_body(handler)
@@ -399,6 +408,7 @@ def handle_post(handler, parsed):
         return j(handler, {'session': s.compact() | {'messages': s.messages}})
 
     if parsed.path == '/api/session/delete':
+        from api.models import _invalidate_index_cache
         sid = body.get('session_id', '')
         if not sid: return bad(handler, 'session_id is required')
         with LOCK: SESSIONS.pop(sid, None)
@@ -407,6 +417,7 @@ def handle_post(handler, parsed):
         except Exception: pass
         try: SESSION_INDEX_FILE.unlink(missing_ok=True)
         except Exception: pass
+        _invalidate_index_cache()
         return j(handler, {'ok': True})
 
     if parsed.path == '/api/session/clear':
@@ -837,10 +848,12 @@ def _handle_workspace_watch(handler, parsed):
                 handler.wfile.flush()
                 continue
             _sse(handler, event, data)
-            if event in ('done', 'error'):
+            if event in ('done', 'error', 'cancel'):
                 break
     except (BrokenPipeError, ConnectionResetError):
         pass
+    finally:
+        _WATCH_THREADS.pop(stream_id, None)
     return True
 
 
@@ -1474,7 +1487,7 @@ def _run_zenops_cmd(cmd, args):
     if cmd == 'status':
         try:
             import urllib.request
-            req = urllib.request.Request('http://127.0.0.1:8090/api/status',
+            req = urllib.request.Request('http://127.0.0.1:8090/',
                 headers={'Accept': 'application/json'})
             with urllib.request.urlopen(req, timeout=5) as r:
                 data = _json.loads(r.read())
@@ -1701,7 +1714,7 @@ def _handle_skill_evolve(handler, body):
         result_output = ''
         try:
             r = subprocess.run(
-                ['python3', evolve_script, '--skill', skill_name, '--yes'],
+                ['python3', evolve_script, '--skill', skill_name],
                 capture_output=True, text=True, timeout=60,
                 env={**os.environ, 'PYTHONPATH': os.path.dirname(evolve_script)}
             )

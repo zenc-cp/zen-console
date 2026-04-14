@@ -22,7 +22,8 @@ _index_cache_time = 0.0
 
 def _invalidate_index_cache():
     """Invalidate the session index cache (call whenever sessions are modified)."""
-    global _index_cache_time
+    global _index_cache, _index_cache_time
+    _index_cache = []
     _index_cache_time = 0.0
 
 
