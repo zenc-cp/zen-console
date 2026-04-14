@@ -333,6 +333,19 @@ def handle_get(handler, parsed):
     if result is not None:
         return result
 
+
+    if parsed.path == '/api/workspace/watch':
+        from api.workspace_watcher import handle_workspace_watch
+        return handle_workspace_watch(handler, parsed)
+
+    if parsed.path == '/api/skills':
+        from api.skill_evolution import handle_skill_list
+        return handle_skill_list(handler, parsed)
+
+    if parsed.path == '/api/skills/health':
+        from api.skill_evolution import handle_skill_health
+        return handle_skill_health(handler, parsed)
+
     return False  # 404
 
 
@@ -441,6 +454,15 @@ def handle_post(handler, parsed):
 
     if parsed.path == '/api/chat/start':
         return _handle_chat_start(handler, body)
+
+
+    if parsed.path == '/api/session/summarize':
+        from api.auto_summary import handle_session_summarize
+        return handle_session_summarize(handler, body)
+
+    if parsed.path == '/api/skills/evolve':
+        from api.skill_evolution import handle_skill_evolve
+        return handle_skill_evolve(handler, body)
 
     if parsed.path == '/api/chat':
         return _handle_chat_sync(handler, body)

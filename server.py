@@ -113,6 +113,16 @@ def main():
     _reaper = _thr.Thread(target=_stream_reaper, daemon=True, name='stream-reaper')
     _reaper.start()
 
+    # Start task sweeper (cleans up stuck queued/running tasks)
+    try:
+        from api.task_sweeper import start_task_sweeper
+        from api.task_store import get_task_store
+        start_task_sweeper(get_task_store(), STREAMS, STREAMS_LOCK)
+        print('  [tasks] Task sweeper started', flush=True)
+    except Exception as e:
+        print(f'  [tasks] Task sweeper failed: {e}', flush=True)
+
+
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f'  Hermes Web UI listening on http://{HOST}:{PORT}', flush=True)
     if HOST == '127.0.0.1':
