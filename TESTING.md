@@ -8,7 +8,7 @@
 > Prerequisites: SSH tunnel is active on port 8787. Open http://localhost:8787 in browser.
 > Server health check: curl http://127.0.0.1:8787/health should return {"status":"ok"}.
 >
-> Automated tests: 1150 total (1150 passing, 0 known failures). Includes onboarding coverage for bootstrap/static wizard presence, real provider config persistence (`config.yaml` + `.env`), the `/api/onboarding/*` backend, and the onboarding skip/existing-config guard.
+> Automated tests: 1195 total (1195 passing, 0 known failures). Includes onboarding coverage for bootstrap/static wizard presence, real provider config persistence (`config.yaml` + `.env`), the `/api/onboarding/*` backend, and the onboarding skip/existing-config guard.
 > Run: `pytest tests/ -v --timeout=60`
 
 ---
@@ -1740,8 +1740,8 @@ Each has automated API-level tests in `tests/test_sprint{N}.py`.
 
 ---
 
-*Last updated: v0.47.0, April 11, 2026*
-*Total automated tests: 645 (645 passing, 0 failures)*
+*Last updated: v0.50.44, April 14, 2026*
+*Total automated tests: 1195 (1195 passing, 0 failures)*
 *Regression gate: tests/test_regressions.py*
 *Run: pytest tests/ -v --timeout=60*
 *Source: <repo>/*
