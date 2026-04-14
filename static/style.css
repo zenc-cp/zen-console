@@ -725,3 +725,369 @@ body.resizing{user-select:none;cursor:col-resize;}
   margin-left: 4px;
   flex-shrink: 0;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HERMES UI UPGRADE — NEW FEATURE STYLES
+   Features: 1=Collapsible Tool Outputs, 2=Activity Timeline,
+             3=Streaming Markdown (no extra CSS), 4=Error Cards,
+             5=File Artifact Cards, 6=Todo Progress Panel
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Feature 1: Collapsible Tool Output Cards ── */
+/* These wrap tool message output with a collapsible body.
+   Similar to thinking-card but with a steel-blue tint. */
+.tool-output-card {
+  background: rgba(124, 185, 255, 0.04);
+  border: 1px solid rgba(124, 185, 255, 0.18);
+  border-radius: 10px;
+  margin: 4px 0 2px 40px;
+  overflow: hidden;
+  transition: border-color .15s;
+}
+.tool-output-card:hover {
+  border-color: rgba(124, 185, 255, 0.32);
+}
+.tool-output-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--blue);
+  user-select: none;
+}
+.tool-output-card-icon {
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.tool-output-card-label {
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-output-card-toggle {
+  margin-left: auto;
+  font-size: 10px;
+  opacity: .6;
+  transition: transform .15s;
+  flex-shrink: 0;
+}
+.tool-output-card.open .tool-output-card-toggle {
+  transform: rotate(90deg);
+}
+.tool-output-card-body {
+  display: none;
+  padding: 0 12px 10px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.tool-output-card.open .tool-output-card-body {
+  display: block;
+}
+.tool-output-card-body pre {
+  font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  padding: 4px 0;
+}
+
+/* ── Feature 2: Activity Timeline Items ── */
+/* Shown inline in the message stream for live tool calls. */
+.activity-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  margin: 2px 0 2px 40px;
+  border-radius: 8px;
+  background: rgba(124, 185, 255, 0.05);
+  border: 1px solid rgba(124, 185, 255, 0.12);
+  font-size: 12px;
+  color: var(--muted);
+  transition: border-color .2s, background .2s;
+}
+.activity-item.done {
+  background: rgba(0, 200, 100, 0.05);
+  border-color: rgba(0, 200, 100, 0.15);
+  color: rgba(0, 255, 136, 0.7);
+}
+/* CSS-only spinner (three animated dots) */
+.activity-spinner {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.activity-spinner span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--blue);
+  opacity: .25;
+  animation: activityDot 1.4s ease-in-out infinite;
+}
+.activity-spinner span:nth-child(2) { animation-delay: .22s; }
+.activity-spinner span:nth-child(3) { animation-delay: .44s; }
+@keyframes activityDot {
+  0%, 80%, 100% { opacity: .2; transform: scale(.8); }
+  40% { opacity: .9; transform: scale(1.1); }
+}
+.activity-check {
+  font-size: 12px;
+  color: #00ff88;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.activity-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Feature 4: Error Cards ── */
+.error-card {
+  background: rgba(220, 38, 38, 0.08);
+  border: 1px solid rgba(220, 38, 38, 0.35);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 6px 0 4px 40px;
+  font-size: 13px;
+  color: #fca5a5;
+}
+.error-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #f87171;
+}
+.error-card-message {
+  color: #fca5a5;
+  line-height: 1.6;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+.error-card-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.error-retry-btn {
+  padding: 5px 14px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #f87171;
+  cursor: pointer;
+  transition: background .15s;
+}
+.error-retry-btn:hover {
+  background: rgba(239, 68, 68, 0.28);
+}
+.error-model-select {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 7px;
+  color: #fca5a5;
+  padding: 5px 10px;
+  font-size: 11px;
+  outline: none;
+  cursor: pointer;
+  max-width: 200px;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23f87171' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 24px;
+}
+.error-model-select option {
+  background: #1a1a2e;
+  color: var(--text);
+}
+
+/* ── Feature 5: File Artifact Cards ── */
+.file-artifact-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin: 4px 0 2px 40px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: default;
+  transition: border-color .15s, background .15s;
+}
+.file-artifact-card:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+}
+.file-artifact-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.file-artifact-info {
+  flex: 1;
+  min-width: 0;
+}
+.file-artifact-name {
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.file-artifact-meta {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.file-artifact-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+.file-artifact-open {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(124, 185, 255, 0.1);
+  border: 1px solid rgba(124, 185, 255, 0.3);
+  color: var(--blue);
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background .15s;
+}
+.file-artifact-open:hover {
+  background: rgba(124, 185, 255, 0.2);
+}
+
+/* ── Feature 6: Todo Progress Panel (inline in message stream) ── */
+.todo-panel {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  margin: 0 0 12px 0;
+  overflow: hidden;
+  max-width: 800px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+}
+.todo-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: #00ff88;
+  user-select: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 255, 136, 0.04);
+}
+.todo-panel-header:hover {
+  background: rgba(0, 255, 136, 0.07);
+}
+.todo-panel-title {
+  flex: 1;
+}
+.todo-panel-count {
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(0, 255, 136, 0.12);
+  color: #00ff88;
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+.todo-panel-toggle {
+  font-size: 10px;
+  opacity: .7;
+  transition: transform .15s;
+}
+.todo-panel.open .todo-panel-toggle {
+  transform: rotate(90deg);
+}
+.todo-panel-body {
+  display: none;
+  padding: 8px 10px 10px;
+}
+.todo-panel.open .todo-panel-body {
+  display: block;
+}
+.todo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+  transition: background .12s;
+}
+.todo-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.todo-item-status {
+  font-size: 13px;
+  flex-shrink: 0;
+  line-height: 1.4;
+  width: 16px;
+  text-align: center;
+}
+.todo-item.done {
+  color: rgba(0, 255, 136, 0.7);
+}
+.todo-item.done .todo-item-text {
+  text-decoration: line-through;
+  opacity: .7;
+}
+.todo-item.in-progress {
+  color: var(--gold);
+}
+.todo-item.in-progress .todo-item-status {
+  animation: todoSpin .9s linear infinite;
+}
+@keyframes todoSpin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.todo-item-text {
+  flex: 1;
+}
+
+/* ── Feature 6: Todo panel in sidebar (existing #todoPanel) ── */
+#todoPanel .todo-panel {
+  margin: 0;
+  border-radius: 8px;
+  border: none;
+  background: none;
+}
+#todoPanel .todo-panel-header {
+  border-radius: 8px 8px 0 0;
+}

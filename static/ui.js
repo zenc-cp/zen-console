@@ -447,6 +447,13 @@ function renderMessages(){
     row.innerHTML=`<div class="msg-role ${m.role}" ${tsTitle?`title="${esc(tsTitle)}"`:''}><div class="role-icon ${m.role}">${isUser?'Y':'H'}</div><span style="font-size:12px">${isUser?'You':'Hermes'}</span>${tsTitle?`<span class="msg-time">${new Date(tsVal*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>`:''}<span class="msg-actions">${editBtn}<button class="msg-copy-btn msg-action-btn" title="Copy" onclick="copyMsg(this)">&#128203;</button>${retryBtn}</span></div>${filesHtml}<div class="msg-body">${bodyHtml}</div>`;
     row.dataset.rawText = String(content).trim();
     inner.appendChild(row);
+    // Feature 4: if this is a flagged error message, append an error card after the row
+    if(!isUser && m._errorCard && typeof buildErrorCard === 'function') {
+      const lastUserMsg = [...S.messages].slice(0, rawIdx).reverse().find(msg => msg && msg.role === 'user');
+      const lastUserText = lastUserMsg ? msgContent(lastUserMsg) : '';
+      const errCard = buildErrorCard(m._errorMsg || msgContent(m), lastUserText);
+      inner.appendChild(errCard);
+    }
   }
   // Insert settled tool call cards (history view only).
   // During live streaming, tool cards are rendered in #liveToolCards by the
@@ -589,6 +596,14 @@ function buildToolCard(tc){
           <pre>${esc(displaySnippet)}</pre>
           ${hasMore?`<button class="tool-card-more" data-full="${esc(tc.snippet||'').replace(/"/g,'&quot;')}" data-short="${esc(displaySnippet||'').replace(/"/g,'&quot;')}" onclick="event.stopPropagation();const p=this.previousElementSibling;const full=this.dataset.full;const short=this.dataset.short;p.textContent=p.textContent===short?full:short;this.textContent=p.textContent===short?'Show more':'Show less'">Show more</button>`:''}
         </div>`:''}
+        ${(function(){
+          // Feature 5: check if this is a file write and render a file artifact card inline
+          if(tc.done!==false && typeof buildFileArtifactCard==='function'){
+            const fileCard=buildFileArtifactCard(tc.name, tc.snippet||'', {filename:(tc.args&&(tc.args.path||tc.args.filename||tc.args.file))||'', args:tc.args||{}});
+            if(fileCard) return fileCard.outerHTML;
+          }
+          return '';
+        })()}
       </div>`:''}
     </div>`;
   return row;
@@ -1081,3 +1096,475 @@ async function uploadPendingFiles(){
   return names;
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HERMES UI UPGRADE — NEW FEATURE FUNCTIONS
+// Features: 1=Collapsible Tool Outputs, 2=Activity Timeline,
+//           5=File Artifact Cards, 6=Todo Progress Panel
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Feature 1: Build a collapsible tool output card ──
+// Called from messages.js when a tool_result SSE event arrives.
+// Also used by renderMessages() for history view of tool messages.
+// Returns a DOM element (div.tool-output-card).
+function buildToolOutputCard(toolName, content, opts) {
+  opts = opts || {};
+  const card = document.createElement('div');
+  card.className = 'tool-output-card';
+
+  // Determine a human-friendly label for the header
+  let label = toolName || 'Tool output';
+  let icon = '🔧';
+  let parsedContent = content;
+
+  // Attempt to parse JSON content
+  let parsed = null;
+  if (typeof content === 'string') {
+    try { parsed = JSON.parse(content); } catch(_) {}
+  }
+
+  // Normalize tool names for smart headers
+  const tn = (toolName || '').toLowerCase();
+  if (tn === 'terminal' || tn === 'run_command' || tn === 'bash' || tn === 'execute_command') {
+    icon = '⬛';
+    const cmd = (opts.command || (parsed && (parsed.command || parsed.cmd)) || '').slice(0, 60);
+    label = cmd ? `$ ${cmd}` : 'Terminal output';
+  } else if (tn === 'read_file' || tn === 'read') {
+    icon = '📄';
+    const fname = opts.filename || (parsed && parsed.filename) || '';
+    const lines = opts.lines || (parsed && parsed.lines) || '';
+    label = fname ? `Read ${fname}${lines ? ` (${lines} lines)` : ''}` : 'Read file';
+  } else if (tn === 'write_file' || tn === 'write') {
+    icon = '✏️';
+    const fname = opts.filename || (parsed && parsed.filename) || '';
+    label = fname ? `Wrote ${fname}` : 'Write file';
+  } else if (tn === 'search_files' || tn === 'grep') {
+    icon = '🔍';
+    label = 'Search results';
+  } else if (tn === 'web_search') {
+    icon = '🌐';
+    label = 'Web search results';
+  } else if (tn === 'memory') {
+    icon = '🧠';
+    label = 'Memory operation';
+  }
+
+  // Render the output text — prefer string, fall back to formatted JSON
+  let outputText = '';
+  if (typeof content === 'string') {
+    outputText = content;
+  } else if (parsed !== null) {
+    outputText = JSON.stringify(parsed, null, 2);
+  } else {
+    outputText = String(content);
+  }
+
+  card.innerHTML = `
+    <div class="tool-output-card-header" onclick="this.closest('.tool-output-card').classList.toggle('open')">
+      <span class="tool-output-card-icon">${icon}</span>
+      <span class="tool-output-card-label">${esc(label)}</span>
+      <span class="tool-output-card-toggle">▸</span>
+    </div>
+    <div class="tool-output-card-body">
+      <pre>${esc(outputText)}</pre>
+    </div>`;
+
+  return card;
+}
+
+// ── Feature 2: Activity timeline helpers ──
+// Keeps a map of activity item DOM elements keyed by tool-call id (or name).
+const _activityItems = {};
+
+// Append a new "running" activity item into the live tool cards area.
+function appendActivityItem(toolName, preview, tid) {
+  const key = tid || toolName;
+  // Don't add duplicates
+  if (_activityItems[key]) return;
+
+  const container = $('liveToolCards');
+  if (!container) return;
+  container.style.display = '';
+
+  const item = document.createElement('div');
+  item.className = 'activity-item';
+  item.dataset.actKey = key;
+  const desc = _activityLabel(toolName, preview);
+  item.innerHTML = `
+    <div class="activity-spinner">
+      <span></span><span></span><span></span>
+    </div>
+    <span class="activity-text">${esc(desc)}</span>`;
+  _activityItems[key] = item;
+  container.appendChild(item);
+  scrollIfPinned();
+}
+
+// Mark an activity item as done (replace spinner with checkmark).
+function resolveActivityItem(toolName, tid) {
+  const key = tid || toolName;
+  const item = _activityItems[key];
+  if (!item) return;
+  item.classList.add('done');
+  item.querySelector('.activity-spinner').outerHTML = '<span class="activity-check">✓</span>';
+  const textEl = item.querySelector('.activity-text');
+  if (textEl) {
+    const prev = textEl.textContent;
+    textEl.textContent = prev.replace(/^Running |^Calling |^Executing /, '') + ' · done';
+  }
+  // Auto-remove done items after 4s to keep the stream clean
+  setTimeout(() => {
+    if (item.parentElement) item.remove();
+    delete _activityItems[key];
+  }, 4000);
+}
+
+// Clear all activity items (called on stream done/cancel)
+function clearActivityItems() {
+  Object.keys(_activityItems).forEach(k => {
+    if (_activityItems[k] && _activityItems[k].parentElement) {
+      _activityItems[k].remove();
+    }
+    delete _activityItems[k];
+  });
+}
+
+function _activityLabel(toolName, preview) {
+  const tn = (toolName || '').toLowerCase();
+  const p = preview ? preview.slice(0, 55) : '';
+  if (tn === 'terminal' || tn === 'bash' || tn === 'execute_command' || tn === 'run_command') {
+    return p ? `Running: ${p}` : 'Running terminal command…';
+  }
+  if (tn === 'read_file' || tn === 'read') return p ? `Reading ${p}` : 'Reading file…';
+  if (tn === 'write_file' || tn === 'write') return p ? `Writing ${p}` : 'Writing file…';
+  if (tn === 'web_search') return p ? `Searching: ${p}` : 'Searching the web…';
+  if (tn === 'web_extract') return p ? `Fetching: ${p}` : 'Fetching URL…';
+  if (tn === 'search_files' || tn === 'grep') return p ? `Searching files: ${p}` : 'Searching files…';
+  if (tn === 'memory') return 'Accessing memory…';
+  if (tn === 'todo') return 'Updating task list…';
+  if (tn === 'delegate_task' || tn === 'subagent_progress') return p ? `Delegating: ${p}` : 'Delegating task…';
+  return p ? `${toolName}: ${p}` : `Calling ${toolName}…`;
+}
+
+// ── Feature 5: Build a file artifact card ──
+// Shown when a tool_result reveals a written file.
+// Returns a DOM element (div.file-artifact-card) or null if not a file artifact.
+function buildFileArtifactCard(toolName, content, opts) {
+  opts = opts || {};
+  const tn = (toolName || '').toLowerCase();
+  const isWriteFile = tn === 'write_file' || tn === 'write' || tn === 'create_file';
+
+  // Detect file write from content text if tool name doesn't match
+  let detectedFilename = opts.filename || '';
+  let detectedSize = opts.size || '';
+
+  if (!detectedFilename) {
+    // Try to parse JSON output for filename
+    if (typeof content === 'string') {
+      try {
+        const p = JSON.parse(content);
+        detectedFilename = p.filename || p.path || p.file || '';
+        detectedSize = p.size || p.bytes || '';
+      } catch(_) {
+        // Try regex patterns: "Wrote /path/to/file.ext" or "wrote file.ext"
+        const m = content.match(/[Ww]rote\s+(?:to\s+)?([^\s,\n(]+\.[a-zA-Z0-9]+)/);
+        if (m) detectedFilename = m[1];
+      }
+    }
+  }
+
+  // Only render a file card if we have a filename and it's a write operation
+  if (!isWriteFile && !detectedFilename) return null;
+  if (!detectedFilename && !isWriteFile) return null;
+  const fname = detectedFilename || (opts.args && opts.args.path) || 'file';
+
+  // Determine icon and extension
+  const ext = fname.split('.').pop().toLowerCase();
+  const imageExts = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'bmp', 'ico']);
+  const isImage = imageExts.has(ext);
+  let fileIcon = '📄';
+  if (isImage) fileIcon = '🖼️';
+  else if (ext === 'pdf') fileIcon = '📕';
+  else if (['js', 'ts', 'jsx', 'tsx'].includes(ext)) fileIcon = '⚡';
+  else if (ext === 'py') fileIcon = '🐍';
+  else if (['md', 'txt', 'rst'].includes(ext)) fileIcon = '📝';
+  else if (['json', 'yaml', 'yml', 'toml'].includes(ext)) fileIcon = '⚙️';
+  else if (['zip', 'tar', 'gz', 'bz2'].includes(ext)) fileIcon = '📦';
+  else if (['mp3', 'wav', 'ogg', 'm4a'].includes(ext)) fileIcon = '🎵';
+  else if (['mp4', 'webm', 'mov', 'avi'].includes(ext)) fileIcon = '🎬';
+
+  // Format size
+  let sizeText = '';
+  if (detectedSize) {
+    const bytes = parseInt(detectedSize, 10);
+    if (!isNaN(bytes)) {
+      sizeText = bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+               : bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB`
+               : `${bytes} B`;
+    } else {
+      sizeText = String(detectedSize);
+    }
+  }
+
+  // Build workspace-relative open link (if session is active)
+  const baseName = fname.replace(/.*[\\/]/, ''); // strip path, keep filename
+  const openHref = S.session
+    ? new URL(`/console/api/file/raw?session_id=${encodeURIComponent(S.session.session_id)}&path=${encodeURIComponent(fname)}`, location.origin).href
+    : '#';
+
+  const card = document.createElement('div');
+  card.className = 'file-artifact-card';
+
+  // For images, show a small thumbnail
+  const thumbHtml = isImage && S.session
+    ? `<img class="file-artifact-thumb" src="${esc(openHref)}" alt="${esc(baseName)}" onerror="this.style.display='none'">`
+    : `<span class="file-artifact-icon">${fileIcon}</span>`;
+
+  card.innerHTML = `
+    ${thumbHtml}
+    <div class="file-artifact-info">
+      <div class="file-artifact-name">${esc(baseName)}</div>
+      <div class="file-artifact-meta">${sizeText ? sizeText + ' · ' : ''}${ext.toUpperCase()}</div>
+    </div>
+    <a class="file-artifact-open" href="${esc(openHref)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Open</a>`;
+
+  return card;
+}
+
+// ── Feature 6: Todo Progress Panel ──
+// _liveTodos: array of {text, status} objects updated from SSE 'tool' events
+// for the 'todo' tool.
+let _liveTodos = [];
+
+function updateLiveTodosFromToolCall(toolName, args) {
+  if ((toolName || '').toLowerCase() !== 'todo') return;
+  if (!args) return;
+  // The todo tool typically passes items as args.items (array) or args.text
+  const items = args.items || args.todos;
+  if (Array.isArray(items)) {
+    // Full replacement (create_todo_list style)
+    _liveTodos = items.map(it => {
+      if (typeof it === 'string') return {text: it, status: 'pending'};
+      return {
+        text: it.description || it.text || it.title || String(it),
+        status: it.status || 'pending'
+      };
+    });
+    renderLiveTodoPanel();
+    return;
+  }
+  // Single item update
+  const text = args.text || args.description || args.title || '';
+  const status = args.status || args.action || 'pending';
+  const idx = args.index !== undefined ? parseInt(args.index, 10) : -1;
+  if (idx >= 0 && idx < _liveTodos.length) {
+    _liveTodos[idx].status = _normalizeStatus(status);
+    if (text) _liveTodos[idx].text = text;
+  } else if (text) {
+    // Find existing by text match
+    const existing = _liveTodos.find(t => t.text === text);
+    if (existing) {
+      existing.status = _normalizeStatus(status);
+    } else if (status !== 'update') {
+      _liveTodos.push({text, status: _normalizeStatus(status)});
+    }
+  }
+  renderLiveTodoPanel();
+}
+
+function _normalizeStatus(s) {
+  const v = (s || '').toLowerCase();
+  if (v === 'completed' || v === 'done' || v === 'complete' || v === 'finish') return 'done';
+  if (v === 'in_progress' || v === 'in-progress' || v === 'active' || v === 'running') return 'in-progress';
+  return 'pending';
+}
+
+function renderLiveTodoPanel() {
+  const container = $('liveToolCards');
+  if (!container || !_liveTodos.length) return;
+  container.style.display = '';
+
+  let panel = container.querySelector('.todo-panel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'todo-panel open';
+    // Prepend so it sits above the tool activity items
+    container.insertBefore(panel, container.firstChild);
+  }
+
+  const doneCount = _liveTodos.filter(t => t.status === 'done').length;
+  const total = _liveTodos.length;
+
+  panel.innerHTML = `
+    <div class="todo-panel-header" onclick="this.closest('.todo-panel').classList.toggle('open')">
+      <span class="todo-panel-title">✅ Task Progress</span>
+      <span class="todo-panel-count">${doneCount}/${total} done</span>
+      <span class="todo-panel-toggle">▸</span>
+    </div>
+    <div class="todo-panel-body">
+      ${_liveTodos.map(item => _renderTodoItem(item)).join('')}
+    </div>`;
+  scrollIfPinned();
+}
+
+function _renderTodoItem(item) {
+  const s = item.status || 'pending';
+  const statusIcon = s === 'done' ? '●' : s === 'in-progress' ? '◐' : '○';
+  return `<div class="todo-item ${s}">
+    <span class="todo-item-status">${statusIcon}</span>
+    <span class="todo-item-text">${esc(item.text)}</span>
+  </div>`;
+}
+
+// Render a static todo panel from a parsed list (used in renderMessages history view).
+function buildTodoPanelElement(items) {
+  if (!items || !items.length) return null;
+  const panel = document.createElement('div');
+  panel.className = 'todo-panel';
+  const doneCount = items.filter(t => (t.status || '') === 'done' || (t.status || '') === 'completed').length;
+  const total = items.length;
+  panel.innerHTML = `
+    <div class="todo-panel-header" onclick="this.closest('.todo-panel').classList.toggle('open')">
+      <span class="todo-panel-title">✅ Task Progress</span>
+      <span class="todo-panel-count">${doneCount}/${total} done</span>
+      <span class="todo-panel-toggle">▸</span>
+    </div>
+    <div class="todo-panel-body">
+      ${items.map(item => {
+        const s = (item.status || 'pending').toLowerCase()
+          .replace('completed','done').replace('in_progress','in-progress');
+        const icon = s === 'done' ? '●' : s === 'in-progress' ? '◐' : '○';
+        return `<div class="todo-item ${s}">
+          <span class="todo-item-status">${icon}</span>
+          <span class="todo-item-text">${esc(item.description || item.text || item.title || String(item))}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+  return panel;
+}
+
+// Clear live todos when a stream ends
+function clearLiveTodos() {
+  _liveTodos = [];
+  const container = $('liveToolCards');
+  if (container) {
+    const panel = container.querySelector('.todo-panel');
+    if (panel) panel.remove();
+  }
+}
+
+// ── Feature 4: Error Card rendering helpers ──
+// Called from messages.js to render a retryable error card.
+function buildErrorCard(errorMsg, lastUserText) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-row';
+
+  // Build model options from the current modelSelect
+  const sel = $('modelSelect');
+  let modelOptions = '';
+  if (sel) {
+    Array.from(sel.options).forEach(opt => {
+      const selected = opt.value === (S.session && S.session.model) ? ' selected' : '';
+      modelOptions += `<option value="${esc(opt.value)}"${selected}>${esc(opt.textContent)}</option>`;
+    });
+  }
+
+  const card = document.createElement('div');
+  card.className = 'error-card';
+  card.innerHTML = `
+    <div class="error-card-header">⚠️ Error</div>
+    <div class="error-card-message">${esc(errorMsg)}</div>
+    <div class="error-card-actions">
+      <button class="error-retry-btn" onclick="retryLastMessage()">↩ Retry</button>
+      ${modelOptions ? `
+      <select class="error-model-select" id="errorModelSwitch" onchange="">
+        ${modelOptions}
+      </select>
+      <button class="error-retry-btn" onclick="retryWithModel(document.getElementById('errorModelSwitch').value)">Retry with model</button>
+      ` : ''}
+    </div>`;
+  wrap.appendChild(card);
+  return wrap;
+}
+
+// Retry by re-sending the last user message
+async function retryLastMessage() {
+  if (S.busy) return;
+  // Find last user message
+  const lastUser = [...S.messages].reverse().find(m => m && m.role === 'user');
+  if (!lastUser) return;
+  const text = msgContent(lastUser);
+  if (!text) return;
+  // Remove the last error assistant message if present
+  const last = S.messages[S.messages.length - 1];
+  if (last && last.role === 'assistant') S.messages.pop();
+  $('msg').value = text;
+  await send();
+}
+
+// Retry with a different model
+async function retryWithModel(modelId) {
+  if (!modelId || S.busy) return;
+  // Switch model on the session
+  if (S.session) {
+    S.session.model = modelId;
+    _applyModelToDropdown(modelId, $('modelSelect'));
+    $('modelChip').textContent = getModelLabel(modelId);
+  }
+  await retryLastMessage();
+}
+
+// ── Feature 6: Sidebar todo panel sync ──
+// loadTodos() is called by renderMessages() when the panelTodos panel is active.
+// It renders _liveTodos (if active) or a history message from the last tool call
+// that included todo data.
+function loadTodos() {
+  const panel = $('todoPanel');
+  if (!panel) return;
+
+  // If there are live todos from the current stream, show them
+  if (typeof _liveTodos !== 'undefined' && _liveTodos.length) {
+    panel.innerHTML = '';
+    const panelEl = buildTodoPanelElement(_liveTodos);
+    if (panelEl) {
+      panelEl.classList.add('open'); // expanded by default in sidebar
+      panel.appendChild(panelEl);
+    }
+    return;
+  }
+
+  // Otherwise try to find todo data in the session's tool calls
+  if (!S.toolCalls || !S.toolCalls.length) {
+    panel.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0;opacity:.6">No active task list. Task progress will appear here during agent runs.</div>';
+    return;
+  }
+
+  // Find the last 'todo' tool call and extract items from its snippet
+  const todoCall = [...S.toolCalls].reverse().find(tc => (tc.name || '').toLowerCase() === 'todo');
+  if (!todoCall) {
+    panel.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0;opacity:.6">No todo data found in this session.</div>';
+    return;
+  }
+
+  let items = [];
+  if (todoCall.args && (todoCall.args.items || todoCall.args.todos)) {
+    items = (todoCall.args.items || todoCall.args.todos).map(it =>
+      typeof it === 'string' ? {text: it, status: 'pending'} :
+      {text: it.description || it.text || it.title || String(it), status: it.status || 'pending'}
+    );
+  } else if (todoCall.snippet) {
+    try {
+      const p = JSON.parse(todoCall.snippet);
+      if (Array.isArray(p)) items = p;
+      else if (p.items) items = p.items;
+    } catch(_) {}
+  }
+
+  if (items.length) {
+    panel.innerHTML = '';
+    const panelEl = buildTodoPanelElement(items);
+    if (panelEl) { panelEl.classList.add('open'); panel.appendChild(panelEl); }
+  } else {
+    panel.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0;opacity:.6">No task items found.</div>';
+  }
+}

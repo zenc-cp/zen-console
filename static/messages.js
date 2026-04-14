@@ -124,7 +124,31 @@ async function send(){
     // Don't render if done has already cleared the session or switched away
     if(!S.session||S.session.session_id!==activeSid||!assistantBody) return;
     if(assistantText){
-      assistantBody.innerHTML=renderMd(assistantText);
+      // Feature 3: Streaming markdown — handle partial code blocks.
+      // Count unmatched ``` fences; if text ends with an open block, defer rendering it.
+      let renderText = assistantText;
+      const fenceMatches = assistantText.match(/```/g) || [];
+      const isOdd = fenceMatches.length % 2 !== 0;
+      if (isOdd) {
+        // Find the last ``` and render everything before it;
+        // append the partial block as raw text so cursor doesn't jump.
+        const lastFence = assistantText.lastIndexOf('```');
+        renderText = assistantText.slice(0, lastFence);
+        const partial = assistantText.slice(lastFence);
+        assistantBody.innerHTML = renderMd(renderText) +
+          '<pre style="opacity:.5;margin-top:8px"><code>' + esc(partial) + '</code></pre>';
+      } else {
+        assistantBody.innerHTML = renderMd(assistantText);
+      }
+      // Apply Prism highlighting to any newly-completed code blocks
+      requestAnimationFrame(() => {
+        if (typeof Prism !== 'undefined' && Prism.highlightAllUnder && assistantBody) {
+          assistantBody.querySelectorAll('pre > code:not([data-highlighted])').forEach(el => {
+            Prism.highlightElement(el);
+            el.setAttribute('data-highlighted', '1');
+          });
+        }
+      });
       scrollIfPinned();
     }
   }
@@ -155,6 +179,12 @@ async function send(){
       const oldRow=$('toolRunningRow');if(oldRow)oldRow.remove();
       const tc={name:d.name, preview:d.preview||'', args:d.args||{}, snippet:'', done:false};
       S.toolCalls.push(tc);
+      // Feature 2: show activity timeline item for this tool call
+      if(typeof appendActivityItem==='function') appendActivityItem(d.name, d.preview||'', d.tid||d.name);
+      // Feature 6: update live todo panel if this is a todo tool call
+      if(typeof updateLiveTodosFromToolCall==='function') updateLiveTodosFromToolCall(d.name, d.args||{});
+      // If this tool event includes a snippet (result already here), resolve activity item
+      if(d.snippet && typeof resolveActivityItem==='function') resolveActivityItem(d.name, d.tid||d.name);
       appendLiveToolCard(tc);
       scrollIfPinned();
     });
@@ -172,7 +202,49 @@ async function send(){
       showApprovalCard(d);
     });
 
-    source.addEventListener('done',e=>{
+    // Feature 2: explicit 'tool_call' event (if backend sends it)
+    source.addEventListener('tool_call',e=>{
+      if(!S.session||S.session.session_id!==activeSid) return;
+      try {
+        const d=JSON.parse(e.data);
+        if(typeof appendActivityItem==='function') appendActivityItem(d.name||d.tool, d.preview||d.input||'', d.id||d.name||d.tool);
+        if(typeof updateLiveTodosFromToolCall==='function') updateLiveTodosFromToolCall(d.name||d.tool, d.args||d.input||{});
+      } catch(_) {}
+    });
+
+    // Feature 2: explicit 'tool_result' event (if backend sends it) — marks activity item done
+    source.addEventListener('tool_result',e=>{
+      if(!S.session||S.session.session_id!==activeSid) return;
+      try {
+        const d=JSON.parse(e.data);
+        if(typeof resolveActivityItem==='function') resolveActivityItem(d.name||d.tool, d.id||d.name||d.tool);
+        // Feature 5: detect file writes in tool result and show file artifact card
+        const content=d.output||d.content||d.result||'';
+        const toolName=d.name||d.tool||'';
+        if(typeof buildFileArtifactCard==='function') {
+          const card=buildFileArtifactCard(toolName, typeof content==='string'?content:JSON.stringify(content), {
+            filename:(d.args&&(d.args.path||d.args.filename||d.args.file))||'',
+            args:d.args||{}
+          });
+          if(card) {
+            const container=$('liveToolCards');
+            if(container){container.style.display='';container.appendChild(card);}
+          }
+        }
+      } catch(_) {}
+    });
+
+    // Feature 6: 'todo' SSE event — direct todo updates from backend
+    source.addEventListener('todo',e=>{
+      if(!S.session||S.session.session_id!==activeSid) return;
+      try {
+        const d=JSON.parse(e.data);
+        // d may be {items:[...]} for full list or {index, status, text} for update
+        if(typeof updateLiveTodosFromToolCall==='function') updateLiveTodosFromToolCall('todo', d);
+      } catch(_) {}
+    });
+
+        source.addEventListener('done',e=>{
       source.close();
       _doneProcessed=true;  // P1: blocks stale RAF callbacks from firing after DOM rebuild
       const d=JSON.parse(e.data);
@@ -204,6 +276,10 @@ async function send(){
         }
         clearLiveToolCards();
         clearLiveThinkingBuffer();
+        // Feature 2: clear activity timeline items
+        if(typeof clearActivityItems==='function') clearActivityItems();
+        // Feature 6: clear live todo panel
+        if(typeof clearLiveTodos==='function') clearLiveTodos();
         // Restore model chip from auto-routing or session default
         const _chip=$('modelChip');
         if(_chip&&d.session&&d.session.model){
@@ -258,7 +334,9 @@ async function send(){
           const icon=isRateLimit?'⏱️':'⚠️';
           const label=isRateLimit?'Rate limit reached':'Error';
           const hint=d.hint?`\n\n*${d.hint}*`:'';
-          S.messages.push({role:'assistant',content:`**${icon} ${label}:** ${d.message}${hint}`});
+          // Feature 4: store structured error info for retryable error card
+          const errMsg = `${label}: ${d.message}${hint}`;
+          S.messages.push({role:'assistant',content:`**${icon} ${label}:** ${d.message}${hint}`, _errorCard:true, _errorMsg:errMsg});
         }catch(_){
           S.messages.push({role:'assistant',content:'**⚠️ Error:** An error occurred. Check server logs.'});
         }
@@ -315,6 +393,10 @@ async function send(){
       }
       if(S.session&&S.session.session_id===activeSid){
         clearLiveToolCards();if(!assistantText)removeThinking();
+        // Feature 2: clear activity items on cancel
+        if(typeof clearActivityItems==='function') clearActivityItems();
+        // Feature 6: clear live todos on cancel
+        if(typeof clearLiveTodos==='function') clearLiveTodos();
         S.messages.push({role:'assistant',content:'*Task cancelled.*'});renderMessages();
       }
       renderSessionList();
@@ -328,7 +410,7 @@ async function send(){
     if(S.session&&S.session.session_id===activeSid){
       S.activeStreamId=null;const _cbe=$('btnCancel');if(_cbe)_cbe.style.display='none';
       clearLiveToolCards();if(!assistantText)removeThinking();
-      S.messages.push({role:'assistant',content:'**Error:** Connection lost'});renderMessages();
+      S.messages.push({role:'assistant',content:'**Error:** Connection lost', _errorCard:true, _errorMsg:'Connection lost'});renderMessages();
     }else{
       // User switched away — show background error banner
       if(typeof trackBackgroundError==='function'){

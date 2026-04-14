@@ -101,10 +101,15 @@
         <div id="memEditError" style="font-size:11px;color:var(--accent);margin-top:6px;display:none"></div>
       </div>
     </div>
-    <!-- Todo panel -->
+    <!-- Todo panel (Feature 6: live task progress) -->
     <div class="panel-view" id="panelTodos">
-      <div style="padding:10px 12px 4px;font-size:11px;color:var(--muted);flex-shrink:0">Current task list</div>
-      <div id="todoPanel" style="flex:1;overflow-y:auto;padding:8px 12px"></div>
+      <div style="padding:10px 12px 4px;font-size:11px;color:var(--muted);flex-shrink:0;display:flex;align-items:center;justify-content:space-between">
+        Current task list
+        <button class="cron-btn" style="padding:2px 7px;font-size:10px" onclick="if(typeof loadTodos==='function')loadTodos()">&#8635; Refresh</button>
+      </div>
+      <div id="todoPanel" style="flex:1;overflow-y:auto;padding:8px 12px">
+        <div style="color:var(--muted);font-size:12px;padding:8px 0;opacity:.6">No active task list. Task progress will appear here during agent runs.</div>
+      </div>
     </div>
     <!-- Workspaces panel -->
     <div class="panel-view" id="panelWorkspaces">
