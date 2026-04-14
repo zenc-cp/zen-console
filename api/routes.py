@@ -105,229 +105,239 @@ async function doLogin(e){
 }
 </script></body></html>'''
 
+# ── GET route helpers (forward declarations for route table) ─────────────────
+
+def _get_index(handler, parsed):
+    return t(handler, _INDEX_HTML_PATH.read_text(encoding='utf-8'),
+             content_type='text/html; charset=utf-8')
+
+def _get_login(handler, parsed):
+    return t(handler, _LOGIN_PAGE_HTML, content_type='text/html; charset=utf-8')
+
+def _get_auth_status(handler, parsed):
+    from api.auth import is_auth_enabled, parse_cookie, verify_session
+    logged_in = False
+    if is_auth_enabled():
+        cv = parse_cookie(handler)
+        logged_in = bool(cv and verify_session(cv))
+    return j(handler, {'auth_enabled': is_auth_enabled(), 'logged_in': logged_in})
+
+def _get_favicon(handler, parsed):
+    handler.send_response(204); handler.end_headers(); return True
+
+def _get_health(handler, parsed):
+    with STREAMS_LOCK: n_streams = len(STREAMS)
+    return j(handler, {
+        'status': 'ok', 'sessions': len(SESSIONS),
+        'active_streams': n_streams,
+        'uptime_seconds': round(time.time() - SERVER_START_TIME, 1),
+    })
+
+def _get_models(handler, parsed):
+    return j(handler, get_available_models())
+
+def _get_settings(handler, parsed):
+    settings = load_settings()
+    settings.pop('password_hash', None)
+    return j(handler, settings)
+
+def _get_session(handler, parsed):
+    sid = parse_qs(parsed.query).get('session_id', [''])[0]
+    if not sid:
+        return j(handler, {'error': 'session_id is required'}, status=400)
+    try:
+        s = get_session(sid)
+        return j(handler, {'session': s.compact() | {
+            'messages': s.messages,
+            'tool_calls': getattr(s, 'tool_calls', []),
+        }})
+    except KeyError:
+        # Not a WebUI session -- try CLI store
+        msgs = get_cli_session_messages(sid)
+        if msgs:
+            cli_meta = None
+            for cs in get_cli_sessions():
+                if cs['session_id'] == sid:
+                    cli_meta = cs
+                    break
+            sess = {
+                'session_id': sid,
+                'title': (cli_meta or {}).get('title', 'CLI Session'),
+                'workspace': (cli_meta or {}).get('workspace', ''),
+                'model': (cli_meta or {}).get('model', 'unknown'),
+                'message_count': len(msgs),
+                'created_at': (cli_meta or {}).get('created_at', 0),
+                'updated_at': (cli_meta or {}).get('updated_at', 0),
+                'pinned': False,
+                'archived': False,
+                'project_id': None,
+                'profile': (cli_meta or {}).get('profile'),
+                'is_cli_session': True,
+                'messages': msgs,
+                'tool_calls': [],
+            }
+            return j(handler, {'session': sess})
+        return bad(handler, 'Session not found', 404)
+
+def _get_sessions(handler, parsed):
+    webui_sessions = all_sessions()
+    settings = load_settings()
+    if settings.get('show_cli_sessions'):
+        cli = get_cli_sessions()
+        webui_ids = {s['session_id'] for s in webui_sessions}
+        deduped_cli = [s for s in cli if s['session_id'] not in webui_ids]
+    else:
+        deduped_cli = []
+    merged = webui_sessions + deduped_cli
+    merged.sort(key=lambda s: s.get('updated_at', 0) or 0, reverse=True)
+    return j(handler, {'sessions': merged, 'cli_count': len(deduped_cli)})
+
+def _get_projects(handler, parsed):
+    return j(handler, {'projects': load_projects()})
+
+def _get_workspaces(handler, parsed):
+    return j(handler, {'workspaces': load_workspaces(), 'last': get_last_workspace()})
+
+def _get_chat_stream_status(handler, parsed):
+    stream_id = parse_qs(parsed.query).get('stream_id', [''])[0]
+    return j(handler, {'active': stream_id in STREAMS, 'stream_id': stream_id})
+
+def _get_chat_cancel(handler, parsed):
+    stream_id = parse_qs(parsed.query).get('stream_id', [''])[0]
+    if not stream_id:
+        return bad(handler, 'stream_id required')
+    cancelled = cancel_stream(stream_id)
+    return j(handler, {'ok': True, 'cancelled': cancelled, 'stream_id': stream_id})
+
+def _get_crons(handler, parsed):
+    from cron.jobs import list_jobs
+    return j(handler, {'jobs': list_jobs(include_disabled=True)})
+
+def _get_wa_sessions(handler, parsed):
+    from pathlib import Path
+    log_path = Path('/home/slimslimchan/claw/logs/wa-sessions.jsonl')
+    if not log_path.exists():
+        return j(handler, {'sessions': [], 'count': 0})
+    try:
+        lines = log_path.read_text().strip().split('\n')
+        entries = []
+        for line in reversed(lines[-50:]):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except Exception:
+                pass
+        return j(handler, {'sessions': entries, 'count': len(entries)})
+    except Exception as e:
+        return j(handler, {'sessions': [], 'error': str(e)}, status=500)
+
+def _get_skills(handler, parsed):
+    from webui_tools.skills_tool import skills_list as _skills_list
+    raw = _skills_list()
+    data = json.loads(raw) if isinstance(raw, str) else raw
+    return j(handler, {'skills': data.get('skills', [])})
+
+def _get_skills_content(handler, parsed):
+    from webui_tools.skills_tool import skill_view as _skill_view, SKILLS_DIR
+    qs = parse_qs(parsed.query)
+    name = qs.get('name', [''])[0]
+    if not name: return j(handler, {'error': 'name required'}, status=400)
+    file_path = qs.get('file', [''])[0]
+    if file_path:
+        import re as _re
+        if _re.search(r'[*?\[\]]', name):
+            return bad(handler, 'Invalid skill name', 400)
+        skill_dir = None
+        for p in SKILLS_DIR.rglob(name):
+            if p.is_dir(): skill_dir = p; break
+        if not skill_dir: return bad(handler, 'Skill not found', 404)
+        target = (skill_dir / file_path).resolve()
+        try: target.relative_to(skill_dir.resolve())
+        except ValueError: return bad(handler, 'Invalid file path', 400)
+        if not target.exists() or not target.is_file():
+            return bad(handler, 'File not found', 404)
+        return j(handler, {'content': target.read_text(encoding='utf-8'), 'path': file_path})
+    raw = _skill_view(name)
+    data = json.loads(raw) if isinstance(raw, str) else raw
+    if 'linked_files' not in data: data['linked_files'] = {}
+    return j(handler, data)
+
+def _get_profiles(handler, parsed):
+    from api.profiles import list_profiles_api, get_active_profile_name
+    return j(handler, {'profiles': list_profiles_api(), 'active': get_active_profile_name()})
+
+def _get_profile_active(handler, parsed):
+    from api.profiles import get_active_profile_name, get_active_hermes_home
+    return j(handler, {'name': get_active_profile_name(), 'path': str(get_active_hermes_home())})
+
+# ── Performance Fix #4: O(1) dict-based GET route table ───────────────────────
+# Replaces the original sequential if/elif chain with dict lookups.
+# For dynamic routes (patterns with path variables), a fallback list is checked
+# after a dict miss — see handle_get() below.
+
+_GET_ROUTES = {
+    '/':                        _get_index,
+    '/index.html':              _get_index,
+    '/login':                   _get_login,
+    '/api/auth/status':         _get_auth_status,
+    '/favicon.ico':             _get_favicon,
+    '/health':                  _get_health,
+    '/api/models':              _get_models,
+    '/api/settings':            _get_settings,
+    '/api/session':             _get_session,
+    '/api/sessions':            _get_sessions,
+    '/api/projects':            _get_projects,
+    '/api/session/export':      _handle_session_export,
+    '/api/workspaces':          _get_workspaces,
+    '/api/sessions/search':     _handle_sessions_search,
+    '/api/list':                _handle_list_dir,
+    '/api/workspace-watch':     _handle_workspace_watch,
+    '/api/chat/stream/status':  _get_chat_stream_status,
+    '/api/chat/cancel':         _get_chat_cancel,
+    '/api/chat/stream':         _handle_sse_stream,
+    '/api/file/raw':            _handle_file_raw,
+    '/api/file':                _handle_file_read,
+    '/api/approval/pending':    _handle_approval_pending,
+    '/api/approval/inject_test': _handle_approval_inject,
+    '/api/crons':               _get_crons,
+    '/api/crons/output':        _handle_cron_output,
+    '/api/crons/recent':        _handle_cron_recent,
+    '/api/wa-sessions':         _get_wa_sessions,
+    '/api/skills':              _get_skills,
+    '/api/skills/content':      _get_skills_content,
+    '/api/memory':              _handle_memory_read,
+    '/api/profiles':            _get_profiles,
+    '/api/profile/active':      _get_profile_active,
+}
+
 # ── GET routes ────────────────────────────────────────────────────────────────
 
 def handle_get(handler, parsed):
-    """Handle all GET routes. Returns True if handled, False for 404."""
+    """Handle all GET routes. Returns True if handled, False for 404.
 
-    if parsed.path in ('/', '/index.html'):
-        return t(handler, _INDEX_HTML_PATH.read_text(encoding='utf-8'),
-                 content_type='text/html; charset=utf-8')
+    Performance Fix #4: Uses O(1) dict lookup instead of sequential if/elif.
+    Static routes are resolved in O(1) via _GET_ROUTES. Prefix-based routes
+    (/static/) are checked before the dict. Dynamic task routes fall through
+    to register_task_routes_get after a dict miss.
+    """
 
-    if parsed.path == '/login':
-        return t(handler, _LOGIN_PAGE_HTML, content_type='text/html; charset=utf-8')
-
-    if parsed.path == '/api/auth/status':
-        from api.auth import is_auth_enabled, parse_cookie, verify_session
-        logged_in = False
-        if is_auth_enabled():
-            cv = parse_cookie(handler)
-            logged_in = bool(cv and verify_session(cv))
-        return j(handler, {'auth_enabled': is_auth_enabled(), 'logged_in': logged_in})
-
-    if parsed.path == '/favicon.ico':
-        handler.send_response(204); handler.end_headers(); return True
-
-    if parsed.path == '/health':
-        with STREAMS_LOCK: n_streams = len(STREAMS)
-        return j(handler, {
-            'status': 'ok', 'sessions': len(SESSIONS),
-            'active_streams': n_streams,
-            'uptime_seconds': round(time.time() - SERVER_START_TIME, 1),
-        })
-
-    if parsed.path == '/api/models':
-        return j(handler, get_available_models())
-
-    if parsed.path == '/api/settings':
-        settings = load_settings()
-        # Never expose the stored password hash to clients
-        settings.pop('password_hash', None)
-        return j(handler, settings)
-
+    # Prefix routes must be checked before the dict (they share a path prefix)
     if parsed.path.startswith('/static/'):
         return _serve_static(handler, parsed)
 
-    if parsed.path == '/api/session':
-        sid = parse_qs(parsed.query).get('session_id', [''])[0]
-        if not sid:
-            return j(handler, {'error': 'session_id is required'}, status=400)
-        try:
-            s = get_session(sid)
-            return j(handler, {'session': s.compact() | {
-                'messages': s.messages,
-                'tool_calls': getattr(s, 'tool_calls', []),
-            }})
-        except KeyError:
-            # Not a WebUI session -- try CLI store
-            msgs = get_cli_session_messages(sid)
-            if msgs:
-                cli_meta = None
-                for cs in get_cli_sessions():
-                    if cs['session_id'] == sid:
-                        cli_meta = cs
-                        break
-                sess = {
-                    'session_id': sid,
-                    'title': (cli_meta or {}).get('title', 'CLI Session'),
-                    'workspace': (cli_meta or {}).get('workspace', ''),
-                    'model': (cli_meta or {}).get('model', 'unknown'),
-                    'message_count': len(msgs),
-                    'created_at': (cli_meta or {}).get('created_at', 0),
-                    'updated_at': (cli_meta or {}).get('updated_at', 0),
-                    'pinned': False,
-                    'archived': False,
-                    'project_id': None,
-                    'profile': (cli_meta or {}).get('profile'),
-                    'is_cli_session': True,
-                    'messages': msgs,
-                    'tool_calls': [],
-                }
-                return j(handler, {'session': sess})
-            return bad(handler, 'Session not found', 404)
+    # O(1) dict lookup for all registered static routes
+    handler_fn = _GET_ROUTES.get(parsed.path)
+    if handler_fn is not None:
+        # Special case: /api/approval/inject_test is loopback-only
+        if parsed.path == '/api/approval/inject_test':
+            if handler.client_address[0] != '127.0.0.1':
+                return j(handler, {'error': 'not found'}, status=404)
+        return handler_fn(handler, parsed)
 
-    if parsed.path == '/api/sessions':
-        webui_sessions = all_sessions()
-        settings = load_settings()
-        if settings.get('show_cli_sessions'):
-            cli = get_cli_sessions()
-            webui_ids = {s['session_id'] for s in webui_sessions}
-            deduped_cli = [s for s in cli if s['session_id'] not in webui_ids]
-        else:
-            deduped_cli = []
-        merged = webui_sessions + deduped_cli
-        merged.sort(key=lambda s: s.get('updated_at', 0) or 0, reverse=True)
-        return j(handler, {'sessions': merged, 'cli_count': len(deduped_cli)})
-
-    if parsed.path == '/api/projects':
-        return j(handler, {'projects': load_projects()})
-
-    if parsed.path == '/api/session/export':
-        return _handle_session_export(handler, parsed)
-
-    if parsed.path == '/api/workspaces':
-        return j(handler, {'workspaces': load_workspaces(), 'last': get_last_workspace()})
-
-    if parsed.path == '/api/sessions/search':
-        return _handle_sessions_search(handler, parsed)
-
-    if parsed.path == '/api/list':
-        return _handle_list_dir(handler, parsed)
-
-    # B4: Workspace file watch SSE stream
-    if parsed.path == '/api/workspace-watch':
-        return _handle_workspace_watch(handler, parsed)
-
-    if parsed.path == '/api/chat/stream/status':
-        stream_id = parse_qs(parsed.query).get('stream_id', [''])[0]
-        return j(handler, {'active': stream_id in STREAMS, 'stream_id': stream_id})
-
-    if parsed.path == '/api/chat/cancel':
-        stream_id = parse_qs(parsed.query).get('stream_id', [''])[0]
-        if not stream_id:
-            return bad(handler, 'stream_id required')
-        cancelled = cancel_stream(stream_id)
-        return j(handler, {'ok': True, 'cancelled': cancelled, 'stream_id': stream_id})
-
-    if parsed.path == '/api/chat/stream':
-        return _handle_sse_stream(handler, parsed)
-
-    if parsed.path == '/api/file/raw':
-        return _handle_file_raw(handler, parsed)
-
-    if parsed.path == '/api/file':
-        return _handle_file_read(handler, parsed)
-
-    if parsed.path == '/api/approval/pending':
-        return _handle_approval_pending(handler, parsed)
-
-    if parsed.path == '/api/approval/inject_test':
-        # Loopback-only: used by automated tests; blocked from any remote client
-        if handler.client_address[0] != '127.0.0.1':
-            return j(handler, {'error': 'not found'}, status=404)
-        return _handle_approval_inject(handler, parsed)
-
-    # ── Cron API (GET) ──
-    if parsed.path == '/api/crons':
-        from cron.jobs import list_jobs
-        return j(handler, {'jobs': list_jobs(include_disabled=True)})
-
-    if parsed.path == '/api/crons/output':
-        return _handle_cron_output(handler, parsed)
-
-    if parsed.path == '/api/crons/recent':
-        return _handle_cron_recent(handler, parsed)
-
-    # ── WhatsApp Session Log (GET) ──
-    if parsed.path == '/api/wa-sessions':
-        # Read WhatsApp sessions from claw/logs/wa-sessions.jsonl
-        # Returns last 50 entries, newest first
-        from pathlib import Path
-        log_path = Path('/home/slimslimchan/claw/logs/wa-sessions.jsonl')
-        if not log_path.exists():
-            return j(handler, {'sessions': [], 'count': 0})
-        try:
-            lines = log_path.read_text().strip().split('\n')
-            entries = []
-            for line in reversed(lines[-50:]):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entries.append(json.loads(line))
-                except Exception:
-                    pass
-            return j(handler, {'sessions': entries, 'count': len(entries)})
-        except Exception as e:
-            return j(handler, {'sessions': [], 'error': str(e)}, status=500)
-
-    # ── Skills API (GET) ──
-    if parsed.path == '/api/skills':
-        from webui_tools.skills_tool import skills_list as _skills_list
-        raw = _skills_list()
-        data = json.loads(raw) if isinstance(raw, str) else raw
-        return j(handler, {'skills': data.get('skills', [])})
-
-    if parsed.path == '/api/skills/content':
-        from webui_tools.skills_tool import skill_view as _skill_view, SKILLS_DIR
-        qs = parse_qs(parsed.query)
-        name = qs.get('name', [''])[0]
-        if not name: return j(handler, {'error': 'name required'}, status=400)
-        file_path = qs.get('file', [''])[0]
-        if file_path:
-            # Serve a linked file from the skill directory
-            import re as _re
-            if _re.search(r'[*?\[\]]', name):
-                return bad(handler, 'Invalid skill name', 400)
-            skill_dir = None
-            for p in SKILLS_DIR.rglob(name):
-                if p.is_dir(): skill_dir = p; break
-            if not skill_dir: return bad(handler, 'Skill not found', 404)
-            target = (skill_dir / file_path).resolve()
-            try: target.relative_to(skill_dir.resolve())
-            except ValueError: return bad(handler, 'Invalid file path', 400)
-            if not target.exists() or not target.is_file():
-                return bad(handler, 'File not found', 404)
-            return j(handler, {'content': target.read_text(encoding='utf-8'), 'path': file_path})
-        raw = _skill_view(name)
-        data = json.loads(raw) if isinstance(raw, str) else raw
-        if 'linked_files' not in data: data['linked_files'] = {}
-        return j(handler, data)
-
-    # ── Memory API (GET) ──
-    if parsed.path == '/api/memory':
-        return _handle_memory_read(handler)
-
-    # ── Profile API (GET) ──
-    if parsed.path == '/api/profiles':
-        from api.profiles import list_profiles_api, get_active_profile_name
-        return j(handler, {'profiles': list_profiles_api(), 'active': get_active_profile_name()})
-
-    if parsed.path == '/api/profile/active':
-        from api.profiles import get_active_profile_name, get_active_hermes_home
-        return j(handler, {'name': get_active_profile_name(), 'path': str(get_active_hermes_home())})
-
-    # ── Background task routes (GET) ──
+    # Dynamic/pattern-based routes (checked after dict miss)
+    # Background task routes registered via task_routes module
     from api.task_routes import register_task_routes_get
     result = register_task_routes_get(parsed.path, handler, parsed)
     if result is not None:
@@ -336,371 +346,351 @@ def handle_get(handler, parsed):
     return False  # 404
 
 
+# ── Performance Fix #4: O(1) dict-based POST route table ────────────────────────
+# Routes that need body read before dispatch are all handled uniformly:
+# body is read once in handle_post() and passed to every handler.
+# Special pre-body routes (upload, branch, summarize, evolve, zenops) are
+# listed in _POST_NO_BODY_ROUTES and handled before the shared read_body() call.
+
+def _post_profile_switch(handler, body):
+    name = body.get('name', '').strip()
+    if not name: return bad(handler, 'name is required')
+    try:
+        from api.profiles import switch_profile
+        result = switch_profile(name)
+        return j(handler, result)
+    except (ValueError, FileNotFoundError) as e:
+        return bad(handler, str(e), 404)
+    except RuntimeError as e:
+        return bad(handler, str(e), 409)
+
+def _post_profile_create(handler, body):
+    name = body.get('name', '').strip()
+    if not name: return bad(handler, 'name is required')
+    import re as _re
+    if not _re.match(r'^[a-z0-9][a-z0-9_-]{0,63}$', name):
+        return bad(handler, 'Invalid profile name: lowercase letters, numbers, hyphens, underscores only')
+    clone_from = body.get('clone_from')
+    if clone_from is not None:
+        clone_from = str(clone_from).strip()
+        if not _re.match(r'^[a-z0-9][a-z0-9_-]{0,63}$', clone_from):
+            return bad(handler, 'Invalid clone_from name')
+    try:
+        from api.profiles import create_profile_api
+        result = create_profile_api(
+            name,
+            clone_from=clone_from,
+            clone_config=bool(body.get('clone_config', False)),
+        )
+        return j(handler, {'ok': True, 'profile': result})
+    except (ValueError, FileExistsError, RuntimeError) as e:
+        return bad(handler, str(e))
+
+def _post_profile_delete(handler, body):
+    name = body.get('name', '').strip()
+    if not name: return bad(handler, 'name is required')
+    try:
+        from api.profiles import delete_profile_api
+        result = delete_profile_api(name)
+        return j(handler, result)
+    except (ValueError, FileNotFoundError) as e:
+        return bad(handler, str(e))
+    except RuntimeError as e:
+        return bad(handler, str(e), 409)
+
+def _post_settings(handler, body):
+    saved = save_settings(body)
+    saved.pop('password_hash', None)
+    return j(handler, saved)
+
+def _post_session_new(handler, body):
+    s = new_session(workspace=body.get('workspace'), model=body.get('model'))
+    return j(handler, {'session': s.compact() | {'messages': s.messages}})
+
+def _post_sessions_cleanup(handler, body):
+    return _handle_sessions_cleanup(handler, body, zero_only=False)
+
+def _post_sessions_cleanup_zero(handler, body):
+    return _handle_sessions_cleanup(handler, body, zero_only=True)
+
+def _post_session_rename(handler, body):
+    try: require(body, 'session_id', 'title')
+    except ValueError as e: return bad(handler, str(e))
+    try: s = get_session(body['session_id'])
+    except KeyError: return bad(handler, 'Session not found', 404)
+    s.title = str(body['title']).strip()[:80] or 'Untitled'
+    s.save()
+    return j(handler, {'session': s.compact()})
+
+def _post_session_update(handler, body):
+    try: require(body, 'session_id')
+    except ValueError as e: return bad(handler, str(e))
+    try: s = get_session(body['session_id'])
+    except KeyError: return bad(handler, 'Session not found', 404)
+    new_ws = str(Path(body.get('workspace', s.workspace)).expanduser().resolve())
+    s.workspace = new_ws; s.model = body.get('model', s.model); s.save()
+    set_last_workspace(new_ws)
+    return j(handler, {'session': s.compact() | {'messages': s.messages}})
+
+def _post_session_delete(handler, body):
+    from api.models import _invalidate_index_cache
+    sid = body.get('session_id', '')
+    if not sid: return bad(handler, 'session_id is required')
+    with LOCK: SESSIONS.pop(sid, None)
+    p = SESSION_DIR / f'{sid}.json'
+    try: p.unlink(missing_ok=True)
+    except Exception: pass
+    try: SESSION_INDEX_FILE.unlink(missing_ok=True)
+    except Exception: pass
+    _invalidate_index_cache()
+    return j(handler, {'ok': True})
+
+def _post_session_clear(handler, body):
+    try: require(body, 'session_id')
+    except ValueError as e: return bad(handler, str(e))
+    try: s = get_session(body['session_id'])
+    except KeyError: return bad(handler, 'Session not found', 404)
+    s.messages = []; s.tool_calls = []; s.title = 'Untitled'; s.save()
+    return j(handler, {'ok': True, 'session': s.compact()})
+
+def _post_session_truncate(handler, body):
+    try: require(body, 'session_id')
+    except ValueError as e: return bad(handler, str(e))
+    if body.get('keep_count') is None:
+        return bad(handler, 'Missing required field(s): keep_count')
+    try: s = get_session(body['session_id'])
+    except KeyError: return bad(handler, 'Session not found', 404)
+    keep = int(body['keep_count'])
+    s.messages = s.messages[:keep]; s.save()
+    return j(handler, {'ok': True, 'session': s.compact() | {'messages': s.messages}})
+
+def _post_session_pin(handler, body):
+    try: require(body, 'session_id')
+    except ValueError as e: return bad(handler, str(e))
+    try: s = get_session(body['session_id'])
+    except KeyError: return bad(handler, 'Session not found', 404)
+    s.pinned = bool(body.get('pinned', True))
+    s.save()
+    return j(handler, {'ok': True, 'session': s.compact()})
+
+def _post_session_archive(handler, body):
+    try: require(body, 'session_id')
+    except ValueError as e: return bad(handler, str(e))
+    try: s = get_session(body['session_id'])
+    except KeyError: return bad(handler, 'Session not found', 404)
+    s.archived = bool(body.get('archived', True))
+    s.save()
+    return j(handler, {'ok': True, 'session': s.compact()})
+
+def _post_session_move(handler, body):
+    try: require(body, 'session_id')
+    except ValueError as e: return bad(handler, str(e))
+    try: s = get_session(body['session_id'])
+    except KeyError: return bad(handler, 'Session not found', 404)
+    s.project_id = body.get('project_id') or None
+    s.save()
+    return j(handler, {'ok': True, 'session': s.compact()})
+
+def _post_projects_create(handler, body):
+    try: require(body, 'name')
+    except ValueError as e: return bad(handler, str(e))
+    import re as _re
+    name = body['name'].strip()[:128]
+    if not name: return bad(handler, 'name required')
+    color = body.get('color')
+    if color and not _re.match(r'^#[0-9a-fA-F]{3,8}$', color):
+        return bad(handler, 'Invalid color format')
+    projects = load_projects()
+    proj = {'project_id': uuid.uuid4().hex[:12], 'name': name, 'color': color, 'created_at': time.time()}
+    projects.append(proj)
+    save_projects(projects)
+    return j(handler, {'ok': True, 'project': proj})
+
+def _post_projects_rename(handler, body):
+    try: require(body, 'project_id', 'name')
+    except ValueError as e: return bad(handler, str(e))
+    import re as _re
+    projects = load_projects()
+    proj = next((p for p in projects if p['project_id'] == body['project_id']), None)
+    if not proj: return bad(handler, 'Project not found', 404)
+    proj['name'] = body['name'].strip()[:128]
+    if 'color' in body:
+        color = body['color']
+        if color and not _re.match(r'^#[0-9a-fA-F]{3,8}$', color):
+            return bad(handler, 'Invalid color format')
+        proj['color'] = color
+    save_projects(projects)
+    return j(handler, {'ok': True, 'project': proj})
+
+def _post_projects_delete(handler, body):
+    try: require(body, 'project_id')
+    except ValueError as e: return bad(handler, str(e))
+    projects = load_projects()
+    proj = next((p for p in projects if p['project_id'] == body['project_id']), None)
+    if not proj: return bad(handler, 'Project not found', 404)
+    projects = [p for p in projects if p['project_id'] != body['project_id']]
+    save_projects(projects)
+    if SESSION_INDEX_FILE.exists():
+        try:
+            index = json.loads(SESSION_INDEX_FILE.read_text(encoding='utf-8'))
+            for entry in index:
+                if entry.get('project_id') == body['project_id']:
+                    try:
+                        s = get_session(entry['session_id'])
+                        s.project_id = None
+                        s.save()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    return j(handler, {'ok': True})
+
+def _post_auth_login(handler, body):
+    from api.auth import verify_password, create_session, set_auth_cookie, is_auth_enabled
+    if not is_auth_enabled():
+        return j(handler, {'ok': True, 'message': 'Auth not enabled'})
+    password = body.get('password', '')
+    if not verify_password(password):
+        return bad(handler, 'Invalid password', 401)
+    cookie_val = create_session()
+    handler.send_response(200)
+    handler.send_header('Content-Type', 'application/json')
+    handler.send_header('Cache-Control', 'no-store')
+    _security_headers(handler)
+    set_auth_cookie(handler, cookie_val)
+    handler.end_headers()
+    handler.wfile.write(json.dumps({'ok': True}).encode())
+    return True
+
+def _post_auth_logout(handler, body):
+    from api.auth import clear_auth_cookie, invalidate_session, parse_cookie
+    cookie_val = parse_cookie(handler)
+    if cookie_val:
+        invalidate_session(cookie_val)
+    handler.send_response(200)
+    handler.send_header('Content-Type', 'application/json')
+    handler.send_header('Cache-Control', 'no-store')
+    _security_headers(handler)
+    clear_auth_cookie(handler)
+    handler.end_headers()
+    handler.wfile.write(json.dumps({'ok': True}).encode())
+    return True
+
+def _post_vision_describe(handler, body):
+    image = body.get('image', '')
+    file_id = body.get('file_id', '')
+    prompt = body.get('prompt', 'Describe the image.')
+    from api.vision import describe_image, upload_and_describe
+    if file_id:
+        result = describe_image(image_path_or_url='', prompt=prompt, file_id=file_id)
+    elif image.startswith('http') or not image.startswith('/'):
+        result = describe_image(image_path_or_url=image, prompt=prompt)
+    else:
+        result = upload_and_describe(local_path=image, prompt=prompt)
+    return j(handler, result)
+
+# POST routes that read their own body (special-cased before the shared read)
+_POST_SELF_READ = {
+    '/api/zenops/exec',
+    '/api/zenops/status',
+    '/api/session/branch',
+    '/api/session/summarize',
+    '/api/skills/evolve',
+    '/api/upload',
+}
+
+# O(1) dict for routes that use the shared body = read_body(handler) pattern
+_POST_ROUTES = {
+    '/api/session/new':                 _post_session_new,
+    '/api/sessions/cleanup':            _post_sessions_cleanup,
+    '/api/sessions/cleanup_zero_message': _post_sessions_cleanup_zero,
+    '/api/session/rename':              _post_session_rename,
+    '/api/session/update':              _post_session_update,
+    '/api/session/delete':              _post_session_delete,
+    '/api/session/clear':               _post_session_clear,
+    '/api/session/truncate':            _post_session_truncate,
+    '/api/session/pin':                 _post_session_pin,
+    '/api/session/archive':             _post_session_archive,
+    '/api/session/move':                _post_session_move,
+    '/api/session/import':              _handle_session_import,
+    '/api/session/import_cli':          _handle_session_import_cli,
+    '/api/chat/start':                  _handle_chat_start,
+    '/api/chat':                        _handle_chat_sync,
+    '/api/crons/create':                _handle_cron_create,
+    '/api/crons/update':                _handle_cron_update,
+    '/api/crons/delete':                _handle_cron_delete,
+    '/api/crons/run':                   _handle_cron_run,
+    '/api/crons/pause':                 _handle_cron_pause,
+    '/api/crons/resume':                _handle_cron_resume,
+    '/api/file/delete':                 _handle_file_delete,
+    '/api/file/save':                   _handle_file_save,
+    '/api/file/create':                 _handle_file_create,
+    '/api/file/rename':                 _handle_file_rename,
+    '/api/file/create-dir':             _handle_create_dir,
+    '/api/workspaces/add':              _handle_workspace_add,
+    '/api/workspaces/remove':           _handle_workspace_remove,
+    '/api/workspaces/rename':           _handle_workspace_rename,
+    '/api/approval/respond':            _handle_approval_respond,
+    '/api/skills/save':                 _handle_skill_save,
+    '/api/skills/delete':               _handle_skill_delete,
+    '/api/memory/write':                _handle_memory_write,
+    '/api/profile/switch':              _post_profile_switch,
+    '/api/profile/create':              _post_profile_create,
+    '/api/profile/delete':              _post_profile_delete,
+    '/api/settings':                    _post_settings,
+    '/api/projects/create':             _post_projects_create,
+    '/api/projects/rename':             _post_projects_rename,
+    '/api/projects/delete':             _post_projects_delete,
+    '/api/auth/login':                  _post_auth_login,
+    '/api/auth/logout':                 _post_auth_logout,
+    '/api/vision/describe':             _post_vision_describe,
+}
+
 # ── POST routes ───────────────────────────────────────────────────────────────
 
 def handle_post(handler, parsed):
-    """Handle all POST routes. Returns True if handled, False for 404."""
+    """Handle all POST routes. Returns True if handled, False for 404.
 
-    # P6: ZenOps quick commands
-    if parsed.path == '/api/zenops/exec':
+    Performance Fix #4: O(1) dict lookup replaces the original sequential
+    if/elif chain. Routes that need to read body themselves are pre-dispatched
+    from _POST_SELF_READ before the shared read_body() call.
+    """
+
+    # Routes that manage their own body read (e.g. multipart uploads,
+    # or handlers that need the raw request object intact)
+    if parsed.path in _POST_SELF_READ:
+        if parsed.path == '/api/zenops/exec':
+            body = read_body(handler)
+            cmd = body.get('cmd', '') if body else ''
+            args = body.get('args', '') if body else ''
+            result, ok = _run_zenops_cmd(cmd, args)
+            return j(handler, {'ok': ok, 'result': result})
+        if parsed.path == '/api/zenops/status':
+            status = {}
+            for agent in ['hunter', 'trader', 'sentinel', 'scribe', 'brain']:
+                _, ok = _run_zenops_cmd(agent, '')
+                status[agent] = {'running': ok}
+            return j(handler, status)
+        if parsed.path == '/api/session/branch':
+            body = read_body(handler)
+            return _handle_session_branch(handler, body)
+        if parsed.path == '/api/session/summarize':
+            body = read_body(handler)
+            return _handle_session_summarize(handler, body)
+        if parsed.path == '/api/skills/evolve':
+            body = read_body(handler)
+            return _handle_skill_evolve(handler, body)
+        if parsed.path == '/api/upload':
+            return handle_upload(handler)
+
+    # O(1) dict lookup for all standard body-sharing POST routes
+    handler_fn = _POST_ROUTES.get(parsed.path)
+    if handler_fn is not None:
         body = read_body(handler)
-        cmd = body.get('cmd', '') if body else ''
-        args = body.get('args', '') if body else ''
-        result, ok = _run_zenops_cmd(cmd, args)
-        return j(handler, {'ok': ok, 'result': result})
+        return handler_fn(handler, body)
 
-    # ZenOps: Agent status
-    if parsed.path == '/api/zenops/status':
-        # Use exec cmd to get status from each agent
-        status = {}
-        for agent in ['hunter', 'trader', 'sentinel', 'scribe', 'brain']:
-            _, ok = _run_zenops_cmd(agent, '')
-            status[agent] = {'running': ok}
-        return j(handler, status)
-
-    # B3: Session branching
-    if parsed.path == '/api/session/branch':
-        body = read_body(handler)
-        return _handle_session_branch(handler, body)
-
-    # B5: Auto-summary — generate LLM summary of session messages
-    if parsed.path == '/api/session/summarize':
-        body = read_body(handler)
-        return _handle_session_summarize(handler, body)
-
-    # B6: Skill evolution — list + trigger zen_evolve for a skill
-    if parsed.path == '/api/skills/evolve':
-        body = read_body(handler)
-        return _handle_skill_evolve(handler, body)
-
-    if parsed.path == '/api/upload':
-        return handle_upload(handler)
-
+    # Dynamic/pattern-based routes checked after dict miss
     body = read_body(handler)
-
-    if parsed.path == '/api/session/new':
-        s = new_session(workspace=body.get('workspace'), model=body.get('model'))
-        return j(handler, {'session': s.compact() | {'messages': s.messages}})
-
-    if parsed.path == '/api/sessions/cleanup':
-        return _handle_sessions_cleanup(handler, body, zero_only=False)
-
-    if parsed.path == '/api/sessions/cleanup_zero_message':
-        return _handle_sessions_cleanup(handler, body, zero_only=True)
-
-    if parsed.path == '/api/session/rename':
-        try: require(body, 'session_id', 'title')
-        except ValueError as e: return bad(handler, str(e))
-        try: s = get_session(body['session_id'])
-        except KeyError: return bad(handler, 'Session not found', 404)
-        s.title = str(body['title']).strip()[:80] or 'Untitled'
-        s.save()
-        return j(handler, {'session': s.compact()})
-
-    if parsed.path == '/api/session/update':
-        try: require(body, 'session_id')
-        except ValueError as e: return bad(handler, str(e))
-        try: s = get_session(body['session_id'])
-        except KeyError: return bad(handler, 'Session not found', 404)
-        new_ws = str(Path(body.get('workspace', s.workspace)).expanduser().resolve())
-        s.workspace = new_ws; s.model = body.get('model', s.model); s.save()
-        set_last_workspace(new_ws)
-        return j(handler, {'session': s.compact() | {'messages': s.messages}})
-
-    if parsed.path == '/api/session/delete':
-        from api.models import _invalidate_index_cache
-        sid = body.get('session_id', '')
-        if not sid: return bad(handler, 'session_id is required')
-        with LOCK: SESSIONS.pop(sid, None)
-        p = SESSION_DIR / f'{sid}.json'
-        try: p.unlink(missing_ok=True)
-        except Exception: pass
-        try: SESSION_INDEX_FILE.unlink(missing_ok=True)
-        except Exception: pass
-        _invalidate_index_cache()
-        return j(handler, {'ok': True})
-
-    if parsed.path == '/api/session/clear':
-        try: require(body, 'session_id')
-        except ValueError as e: return bad(handler, str(e))
-        try: s = get_session(body['session_id'])
-        except KeyError: return bad(handler, 'Session not found', 404)
-        s.messages = []; s.tool_calls = []; s.title = 'Untitled'; s.save()
-        return j(handler, {'ok': True, 'session': s.compact()})
-
-    if parsed.path == '/api/session/truncate':
-        try: require(body, 'session_id')
-        except ValueError as e: return bad(handler, str(e))
-        if body.get('keep_count') is None:
-            return bad(handler, 'Missing required field(s): keep_count')
-        try: s = get_session(body['session_id'])
-        except KeyError: return bad(handler, 'Session not found', 404)
-        keep = int(body['keep_count'])
-        s.messages = s.messages[:keep]; s.save()
-        return j(handler, {'ok': True, 'session': s.compact() | {'messages': s.messages}})
-
-    if parsed.path == '/api/chat/start':
-        return _handle_chat_start(handler, body)
-
-    if parsed.path == '/api/chat':
-        return _handle_chat_sync(handler, body)
-
-    # ── Cron API (POST) ──
-    if parsed.path == '/api/crons/create':
-        return _handle_cron_create(handler, body)
-
-    if parsed.path == '/api/crons/update':
-        return _handle_cron_update(handler, body)
-
-    if parsed.path == '/api/crons/delete':
-        return _handle_cron_delete(handler, body)
-
-    if parsed.path == '/api/crons/run':
-        return _handle_cron_run(handler, body)
-
-    if parsed.path == '/api/crons/pause':
-        return _handle_cron_pause(handler, body)
-
-    if parsed.path == '/api/crons/resume':
-        return _handle_cron_resume(handler, body)
-
-    # ── File ops (POST) ──
-    if parsed.path == '/api/file/delete':
-        return _handle_file_delete(handler, body)
-
-    if parsed.path == '/api/file/save':
-        return _handle_file_save(handler, body)
-
-    if parsed.path == '/api/file/create':
-        return _handle_file_create(handler, body)
-
-    if parsed.path == '/api/file/rename':
-        return _handle_file_rename(handler, body)
-
-    if parsed.path == '/api/file/create-dir':
-        return _handle_create_dir(handler, body)
-
-    # ── Workspace management (POST) ──
-    if parsed.path == '/api/workspaces/add':
-        return _handle_workspace_add(handler, body)
-
-    if parsed.path == '/api/workspaces/remove':
-        return _handle_workspace_remove(handler, body)
-
-    if parsed.path == '/api/workspaces/rename':
-        return _handle_workspace_rename(handler, body)
-
-    # ── Approval (POST) ──
-    if parsed.path == '/api/approval/respond':
-        return _handle_approval_respond(handler, body)
-
-    # ── Skills (POST) ──
-    if parsed.path == '/api/skills/save':
-        return _handle_skill_save(handler, body)
-
-    if parsed.path == '/api/skills/delete':
-        return _handle_skill_delete(handler, body)
-
-    # ── Memory (POST) ──
-    if parsed.path == '/api/memory/write':
-        return _handle_memory_write(handler, body)
-
-    # ── Profile API (POST) ──
-    if parsed.path == '/api/profile/switch':
-        name = body.get('name', '').strip()
-        if not name: return bad(handler, 'name is required')
-        try:
-            from api.profiles import switch_profile
-            result = switch_profile(name)
-            return j(handler, result)
-        except (ValueError, FileNotFoundError) as e:
-            return bad(handler, str(e), 404)
-        except RuntimeError as e:
-            return bad(handler, str(e), 409)
-
-    if parsed.path == '/api/profile/create':
-        name = body.get('name', '').strip()
-        if not name: return bad(handler, 'name is required')
-        import re as _re
-        if not _re.match(r'^[a-z0-9][a-z0-9_-]{0,63}$', name):
-            return bad(handler, 'Invalid profile name: lowercase letters, numbers, hyphens, underscores only')
-        clone_from = body.get('clone_from')
-        if clone_from is not None:
-            clone_from = str(clone_from).strip()
-            if not _re.match(r'^[a-z0-9][a-z0-9_-]{0,63}$', clone_from):
-                return bad(handler, 'Invalid clone_from name')
-        try:
-            from api.profiles import create_profile_api
-            result = create_profile_api(
-                name,
-                clone_from=clone_from,
-                clone_config=bool(body.get('clone_config', False)),
-            )
-            return j(handler, {'ok': True, 'profile': result})
-        except (ValueError, FileExistsError, RuntimeError) as e:
-            return bad(handler, str(e))
-
-    if parsed.path == '/api/profile/delete':
-        name = body.get('name', '').strip()
-        if not name: return bad(handler, 'name is required')
-        try:
-            from api.profiles import delete_profile_api
-            result = delete_profile_api(name)
-            return j(handler, result)
-        except (ValueError, FileNotFoundError) as e:
-            return bad(handler, str(e))
-        except RuntimeError as e:
-            return bad(handler, str(e), 409)
-
-    # ── Settings (POST) ──
-    if parsed.path == '/api/settings':
-        saved = save_settings(body)
-        saved.pop('password_hash', None)  # never expose hash to client
-        return j(handler, saved)
-
-    # ── Session pin (POST) ──
-    if parsed.path == '/api/session/pin':
-        try: require(body, 'session_id')
-        except ValueError as e: return bad(handler, str(e))
-        try: s = get_session(body['session_id'])
-        except KeyError: return bad(handler, 'Session not found', 404)
-        s.pinned = bool(body.get('pinned', True))
-        s.save()
-        return j(handler, {'ok': True, 'session': s.compact()})
-
-    # ── Session archive (POST) ──
-    if parsed.path == '/api/session/archive':
-        try: require(body, 'session_id')
-        except ValueError as e: return bad(handler, str(e))
-        try: s = get_session(body['session_id'])
-        except KeyError: return bad(handler, 'Session not found', 404)
-        s.archived = bool(body.get('archived', True))
-        s.save()
-        return j(handler, {'ok': True, 'session': s.compact()})
-
-    # ── Session move to project (POST) ──
-    if parsed.path == '/api/session/move':
-        try: require(body, 'session_id')
-        except ValueError as e: return bad(handler, str(e))
-        try: s = get_session(body['session_id'])
-        except KeyError: return bad(handler, 'Session not found', 404)
-        s.project_id = body.get('project_id') or None
-        s.save()
-        return j(handler, {'ok': True, 'session': s.compact()})
-
-    # ── Project CRUD (POST) ──
-    if parsed.path == '/api/projects/create':
-        try: require(body, 'name')
-        except ValueError as e: return bad(handler, str(e))
-        import re as _re
-        name = body['name'].strip()[:128]
-        if not name: return bad(handler, 'name required')
-        color = body.get('color')
-        if color and not _re.match(r'^#[0-9a-fA-F]{3,8}$', color):
-            return bad(handler, 'Invalid color format')
-        projects = load_projects()
-        proj = {'project_id': uuid.uuid4().hex[:12], 'name': name, 'color': color, 'created_at': time.time()}
-        projects.append(proj)
-        save_projects(projects)
-        return j(handler, {'ok': True, 'project': proj})
-
-    if parsed.path == '/api/projects/rename':
-        try: require(body, 'project_id', 'name')
-        except ValueError as e: return bad(handler, str(e))
-        import re as _re
-        projects = load_projects()
-        proj = next((p for p in projects if p['project_id'] == body['project_id']), None)
-        if not proj: return bad(handler, 'Project not found', 404)
-        proj['name'] = body['name'].strip()[:128]
-        if 'color' in body:
-            color = body['color']
-            if color and not _re.match(r'^#[0-9a-fA-F]{3,8}$', color):
-                return bad(handler, 'Invalid color format')
-            proj['color'] = color
-        save_projects(projects)
-        return j(handler, {'ok': True, 'project': proj})
-
-    if parsed.path == '/api/projects/delete':
-        try: require(body, 'project_id')
-        except ValueError as e: return bad(handler, str(e))
-        projects = load_projects()
-        proj = next((p for p in projects if p['project_id'] == body['project_id']), None)
-        if not proj: return bad(handler, 'Project not found', 404)
-        projects = [p for p in projects if p['project_id'] != body['project_id']]
-        save_projects(projects)
-        # Unassign all sessions that belonged to this project
-        if SESSION_INDEX_FILE.exists():
-            try:
-                index = json.loads(SESSION_INDEX_FILE.read_text(encoding='utf-8'))
-                for entry in index:
-                    if entry.get('project_id') == body['project_id']:
-                        try:
-                            s = get_session(entry['session_id'])
-                            s.project_id = None
-                            s.save()
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-        return j(handler, {'ok': True})
-
-    # ── Session import from JSON (POST) ──
-    if parsed.path == '/api/session/import':
-        return _handle_session_import(handler, body)
-
-    # ── CLI session import (POST) ──
-    if parsed.path == '/api/session/import_cli':
-        return _handle_session_import_cli(handler, body)
-
-    # ── Auth endpoints (POST) ──
-    if parsed.path == '/api/auth/login':
-        from api.auth import verify_password, create_session, set_auth_cookie, is_auth_enabled
-        if not is_auth_enabled():
-            return j(handler, {'ok': True, 'message': 'Auth not enabled'})
-        password = body.get('password', '')
-        if not verify_password(password):
-            return bad(handler, 'Invalid password', 401)
-        cookie_val = create_session()
-        handler.send_response(200)
-        handler.send_header('Content-Type', 'application/json')
-        handler.send_header('Cache-Control', 'no-store')
-        _security_headers(handler)
-        set_auth_cookie(handler, cookie_val)
-        handler.end_headers()
-        handler.wfile.write(json.dumps({'ok': True}).encode())
-        return True
-
-    if parsed.path == '/api/auth/logout':
-        from api.auth import clear_auth_cookie, invalidate_session, parse_cookie
-        cookie_val = parse_cookie(handler)
-        if cookie_val:
-            invalidate_session(cookie_val)
-        handler.send_response(200)
-        handler.send_header('Content-Type', 'application/json')
-        handler.send_header('Cache-Control', 'no-store')
-        _security_headers(handler)
-        clear_auth_cookie(handler)
-        handler.end_headers()
-        handler.wfile.write(json.dumps({'ok': True}).encode())
-        return True
-
-    if parsed.path == '/api/vision/describe':
-        body = read_body(handler)
-        data = json.loads(body or '{}')
-        image = data.get('image', '')
-        file_id = data.get('file_id', '')
-        prompt = data.get('prompt', 'Describe the image.')
-        from api.vision import describe_image, upload_and_describe
-        if file_id:
-            result = describe_image(image_path_or_url='', prompt=prompt, file_id=file_id)
-        elif image.startswith('http') or not image.startswith('/'):
-            result = describe_image(image_path_or_url=image, prompt=prompt)
-        else:
-            # Local workspace file — upload first for better reliability
-            result = upload_and_describe(local_path=image, prompt=prompt)
-        return j(handler, result)
-
-    # ── Background task routes (POST) ──
     from api.task_routes import register_task_routes_post
     result = register_task_routes_post(parsed.path, handler, body)
     if result is not None:

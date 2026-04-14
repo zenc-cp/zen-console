@@ -2,6 +2,13 @@
 
 Provides task submission, status polling, result retrieval, and management.
 Integrated into routes.py handle_get and handle_post.
+
+Task 4: Profile support in task submit.
+  POST /api/task/submit now accepts an optional `profile` field:
+    {"prompt": "...", "profile": "ops", "session_id": "ops-daily", "model": "..."}
+  The profile name is stored in the task and applied by task_worker.py before
+  the agent runs. This allows background tasks to execute under a different
+  Hermes profile (model, toolsets, SOUL) than the current active profile.
 """
 
 import logging
@@ -19,7 +26,11 @@ def handle_task_submit(handler, body) -> True:
     """Submit a new background task.
 
     Required body fields: session_id, message
-    Optional: model, workspace, attachments, notify (dict)
+    Optional: model, workspace, attachments, notify (dict), profile (str)
+
+    Task 4: The `profile` field selects which Hermes role profile to activate
+    before the agent runs. Example profiles: 'ops', 'dev', 'analyst', 'pm'.
+    If omitted, the worker runs under the currently active profile.
     """
     try:
         require(body, 'session_id', 'message')
@@ -33,6 +44,10 @@ def handle_task_submit(handler, body) -> True:
     workspace = body.get('workspace', '')
     attachments = body.get('attachments', [])
     notify = body.get('notify', {})
+    # Task 4: extract optional profile name
+    profile = body.get('profile') or None
+    if profile is not None:
+        profile = str(profile).strip() or None
 
     task = get_task_store().create_task(
         session_id=session_id,
@@ -41,6 +56,7 @@ def handle_task_submit(handler, body) -> True:
         workspace=workspace,
         attachments=attachments,
         notify_config=notify,
+        profile=profile,
     )
     j(handler, {'ok': True, 'task': task})
     return True

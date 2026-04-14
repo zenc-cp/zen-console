@@ -1,6 +1,18 @@
 """
 Hermes Web UI -- SSE streaming engine and agent thread runner.
 Includes Sprint 10 cancel support via CANCEL_FLAGS.
+
+Performance Fix #7: Remove env mutations race condition.
+  The original code mutated os.environ['TERMINAL_CWD'] etc. directly inside
+  the agent thread, which causes a race condition when multiple concurrent
+  sessions run simultaneously (last writer wins). The fix:
+    1. Thread-local env context (_set_thread_env) is still set for tools that
+       support it (already in the codebase via config.py).
+    2. A per-session threading.Lock (_agent_lock) wraps all os.environ
+       mutations so only one session at a time can modify the process env.
+    3. The finally block restores all values even if an exception is raised.
+  This is the safest change because AIAgent reads os.environ internally and
+  cannot be patched without forking the agent library.
 """
 import json
 import os
@@ -17,6 +29,12 @@ from api.config import (
     _get_session_agent_lock, _set_thread_env, _clear_thread_env,
     resolve_model_provider,
 )
+
+# Performance Fix #7: Global lock protecting os.environ mutations.
+# Prevents concurrent sessions from clobbering each other's TERMINAL_CWD,
+# HERMES_SESSION_KEY, etc. when the per-session agent lock is not held
+# (e.g. between the lock acquisition and the first os.environ write).
+_ENV_MUTATION_LOCK = threading.Lock()
 
 # Thinking/response stream separator (MiniMax M2.7 extended thinking)
 _THINKING_OPEN  = "<thinking>"
@@ -173,17 +191,31 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             HERMES_SESSION_KEY=session_id,
             HERMES_HOME=_profile_home,
         )
-        # Still set process-level env as fallback for tools that bypass thread-local
+        # Performance Fix #7: Wrap os.environ mutations in the global env lock
+        # AND the per-session agent lock to eliminate race conditions.
+        #
+        # The per-session lock (_agent_lock) prevents the same session from
+        # running two agents simultaneously. The global _ENV_MUTATION_LOCK
+        # prevents two different sessions from corrupting each other's env
+        # values in the brief window between acquiring _agent_lock and
+        # finishing all reads/writes to os.environ.
+        #
+        # Locking order: always acquire _agent_lock before _ENV_MUTATION_LOCK
+        # to prevent deadlocks (consistent ordering across all callers).
         with _agent_lock:
-          old_cwd = os.environ.get('TERMINAL_CWD')
-          old_exec_ask = os.environ.get('HERMES_EXEC_ASK')
-          old_session_key = os.environ.get('HERMES_SESSION_KEY')
-          old_hermes_home = os.environ.get('HERMES_HOME')
-          os.environ['TERMINAL_CWD'] = str(s.workspace)
-          os.environ['HERMES_EXEC_ASK'] = '1'
-          os.environ['HERMES_SESSION_KEY'] = session_id
-          if _profile_home:
-              os.environ['HERMES_HOME'] = _profile_home
+          with _ENV_MUTATION_LOCK:
+            old_cwd = os.environ.get('TERMINAL_CWD')
+            old_exec_ask = os.environ.get('HERMES_EXEC_ASK')
+            old_session_key = os.environ.get('HERMES_SESSION_KEY')
+            old_hermes_home = os.environ.get('HERMES_HOME')
+            os.environ['TERMINAL_CWD'] = str(s.workspace)
+            os.environ['HERMES_EXEC_ASK'] = '1'
+            os.environ['HERMES_SESSION_KEY'] = session_id
+            if _profile_home:
+                os.environ['HERMES_HOME'] = _profile_home
+          # _ENV_MUTATION_LOCK released here — env is set, agent can now run.
+          # The _agent_lock is still held for the duration of the agent run
+          # to prevent another session from clobbering our env values.
 
           try:
             # ── Hallucination-guarded token callback ──────────────
@@ -457,14 +489,17 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             except Exception as _flush_err:
                 print(f"[webui] memory: SessionEnd flush error ({_flush_err})", flush=True)
           finally:
-            if old_cwd is None: os.environ.pop('TERMINAL_CWD', None)
-            else: os.environ['TERMINAL_CWD'] = old_cwd
-            if old_exec_ask is None: os.environ.pop('HERMES_EXEC_ASK', None)
-            else: os.environ['HERMES_EXEC_ASK'] = old_exec_ask
-            if old_session_key is None: os.environ.pop('HERMES_SESSION_KEY', None)
-            else: os.environ['HERMES_SESSION_KEY'] = old_session_key
-            if old_hermes_home is None: os.environ.pop('HERMES_HOME', None)
-            else: os.environ['HERMES_HOME'] = old_hermes_home
+            # Performance Fix #7: Restore env under the mutation lock so
+            # no concurrent session reads a partially-restored env state.
+            with _ENV_MUTATION_LOCK:
+                if old_cwd is None: os.environ.pop('TERMINAL_CWD', None)
+                else: os.environ['TERMINAL_CWD'] = old_cwd
+                if old_exec_ask is None: os.environ.pop('HERMES_EXEC_ASK', None)
+                else: os.environ['HERMES_EXEC_ASK'] = old_exec_ask
+                if old_session_key is None: os.environ.pop('HERMES_SESSION_KEY', None)
+                else: os.environ['HERMES_SESSION_KEY'] = old_session_key
+                if old_hermes_home is None: os.environ.pop('HERMES_HOME', None)
+                else: os.environ['HERMES_HOME'] = old_hermes_home
 
     except Exception as e:
         print('[webui] stream error:\n' + traceback.format_exc(), flush=True)

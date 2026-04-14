@@ -1,0 +1,7 @@
+model: openrouter/google/gemma-4-26b-a4b-it
+max_tokens: 2000
+temperature: 0.3
+toolsets:
+  - todo
+  - memory
+  - file_operations

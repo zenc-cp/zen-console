@@ -1,0 +1,221 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Stream D — Clawboard Agent Status Dots
+   File:   status-dots.css
+   Scope:  Appended to the Clawboard's existing stylesheet
+           (or included via a separate <link> after the main CSS)
+
+   These rules provide:
+   1. Canvas-overlay status dots rendered as HTML elements on top of the
+      pixel-art canvas (positioned absolutely via data-desk-index).
+   2. Status dot classes used inside DOM-based agent panel overlays
+      (sidebar panels, tooltip overlays, agent-info modals).
+   3. Pulse animation for the "running" state.
+   4. Tooltip markup for last-activity time.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+
+/* ── Keyframes ──────────────────────────────────────────────────────────── */
+
+@keyframes pulse-dot {
+  0%,  100% { opacity: 1;    transform: scale(1);    }
+  50%        { opacity: 0.4; transform: scale(0.85); }
+}
+
+@keyframes pulse-dot-ring {
+  0%   { transform: scale(1);   opacity: 0.6; }
+  100% { transform: scale(2.2); opacity: 0;   }
+}
+
+
+/* ── Base dot ───────────────────────────────────────────────────────────── */
+
+.agent-status-dot {
+  width:  8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+
+  /* Default margin when placed inline before an agent name */
+  margin-right: 6px;
+
+  /* Smooth colour transitions when status changes via JS className swap */
+  transition: background-color 0.3s ease, box-shadow 0.3s ease;
+
+  /* Crisp rendering on pixel-art displays */
+  image-rendering: pixelated;
+}
+
+
+/* ── Status variants ────────────────────────────────────────────────────── */
+
+.agent-status-dot.running {
+  background: #00ff88;
+  box-shadow: 0 0 4px rgba(0, 255, 136, 0.7);
+  animation: pulse-dot 1.5s ease-in-out infinite;
+  position: relative;
+}
+
+/* Expanding ring behind the running dot */
+.agent-status-dot.running::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 255, 136, 0.5);
+  animation: pulse-dot-ring 1.5s ease-out infinite;
+}
+
+.agent-status-dot.idle {
+  background: #666666;
+  box-shadow: none;
+  animation: none;
+}
+
+.agent-status-dot.error {
+  background: #ff4444;
+  box-shadow: 0 0 4px rgba(255, 68, 68, 0.5);
+  animation: none;
+}
+
+.agent-status-dot.stale {
+  background: #C9A84C;
+  box-shadow: 0 0 3px rgba(201, 168, 76, 0.4);
+  animation: none;
+}
+
+
+/* ── Canvas-overlay dot container ────────────────────────────────────────── */
+/* These dots float over the pixel-art canvas aligned to each desk position.
+   JS sets `left` and `top` via inline style based on canvas offset + desk coords. */
+
+.desk-status-overlay {
+  position: absolute;
+  pointer-events: none;   /* don't intercept canvas mouse events */
+  z-index: 10;
+}
+
+/* A slightly larger overlay dot for canvas usage (12px for readability at scale) */
+.desk-status-overlay .agent-status-dot {
+  width:  12px;
+  height: 12px;
+  margin: 0;
+  pointer-events: auto;   /* re-enable for tooltip hover on the dot itself */
+  cursor: default;
+}
+
+
+/* ── Tooltip ─────────────────────────────────────────────────────────────── */
+/* Shown on hover: last activity time + agent role */
+
+.agent-status-dot[data-tooltip] {
+  position: relative;
+  cursor: default;
+}
+
+.agent-status-dot[data-tooltip]::before {
+  content: attr(data-tooltip);
+
+  /* Hidden by default */
+  display: block;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+
+  /* Positioning: above the dot */
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+
+  /* Appearance — matches the Clawboard's dark pixel aesthetic */
+  background: rgba(8, 9, 15, 0.95);
+  border: 1px solid rgba(0, 255, 136, 0.2);
+  border-radius: 6px;
+  color: #e8e8f0;
+  font-size: 10px;
+  font-family: 'Press Start 2P', 'Courier New', monospace;
+  font-size: 9px;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  padding: 5px 8px;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+/* Tooltip arrow */
+.agent-status-dot[data-tooltip]::before {
+  /* Combined: text content + no arrow (keep it minimal for pixel art) */
+}
+
+.agent-status-dot[data-tooltip]:hover::before {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* Status-coloured tooltip border when running */
+.agent-status-dot.running[data-tooltip]::before {
+  border-color: rgba(0, 255, 136, 0.4);
+  color: #00ff88;
+}
+
+.agent-status-dot.error[data-tooltip]::before {
+  border-color: rgba(255, 68, 68, 0.4);
+  color: #ff6666;
+}
+
+.agent-status-dot.stale[data-tooltip]::before {
+  border-color: rgba(201, 168, 76, 0.4);
+  color: #C9A84C;
+}
+
+
+/* ── Agent info panel — status header row ───────────────────────────────── */
+/* Used inside the agent modal/sidebar that opens on desk click */
+
+.agent-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.agent-panel-header .agent-status-dot {
+  /* Slightly larger inside the panel header */
+  width:  10px;
+  height: 10px;
+}
+
+.agent-panel-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e8e8f0;
+  flex: 1;
+  /* Press Start 2P for pixel branding */
+  font-family: 'Press Start 2P', 'Courier New', monospace;
+  font-size: 9px;
+  letter-spacing: 0.03em;
+}
+
+.agent-panel-status-text {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+  font-style: italic;
+}
+
+/* Override text colour based on status class applied to the row */
+.agent-panel-header.running .agent-panel-status-text { color: #00ff88; }
+.agent-panel-header.error   .agent-panel-status-text { color: #ff4444; }
+.agent-panel-header.stale   .agent-panel-status-text { color: #C9A84C; }
+
+
+/* ── Responsive — hide overlay dots on very small viewports ─────────────── */
+
+@media (max-width: 480px) {
+  .desk-status-overlay .agent-status-dot {
+    width:  8px;
+    height: 8px;
+  }
+}

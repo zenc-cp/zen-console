@@ -5,6 +5,13 @@ and runs it through the same _run_agent_streaming() pipeline.
 Events are captured into the DB instead of an SSE queue.
 
 Starts as a daemon thread from server.py main().
+
+Task 4: Profile support.
+  If a task has a 'profile' field set, the worker switches to that Hermes
+  profile before invoking the agent, then restores the previous profile
+  after the task completes. This allows background tasks to run under a
+  role-specific config (model, toolsets, SOUL.md) without affecting the
+  main UI's active profile.
 """
 
 import json
@@ -72,11 +79,60 @@ class BackgroundWorker:
     # ── task execution ────────────────────────────────────────────────────────
 
     def _execute_task(self, task: dict) -> None:
-        """Run the task through the agent pipeline, capturing all events."""
+        """Run the task through the agent pipeline, capturing all events.
+
+        Task 4: If the task specifies a 'profile', switch to it before running
+        the agent and restore the previous profile when done. Profile switching
+        is wrapped in a try/finally so a failed switch never leaves the server
+        in the wrong profile state.
+        """
         from api.streaming import _run_agent_streaming, STREAMS, STREAMS_LOCK
 
         task_id = task['task_id']
         stream_id = f"bg_{task_id}"
+
+        # Task 4: Apply profile before agent run
+        _prev_profile = None
+        _task_profile = task.get('profile')
+        if _task_profile:
+            try:
+                from api.profiles import switch_profile, get_active_profile_name
+                _prev_profile = get_active_profile_name()
+                if _prev_profile != _task_profile:
+                    switch_profile(_task_profile)
+                    import logging as _log
+                    _log.getLogger(__name__).info(
+                        'Task %s: switched to profile %r (was %r)',
+                        task_id[:8], _task_profile, _prev_profile,
+                    )
+                else:
+                    _prev_profile = None  # no switch needed, nothing to restore
+            except Exception as _pe:
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    'Task %s: profile switch to %r failed: %s',
+                    task_id[:8], _task_profile, _pe,
+                )
+                _prev_profile = None  # switch failed, don't attempt restore
+
+        try:
+            self._run_agent_for_task(task, task_id, stream_id)
+        finally:
+            # Task 4: Restore previous profile after task completes
+            if _prev_profile is not None:
+                try:
+                    from api.profiles import switch_profile
+                    switch_profile(_prev_profile)
+                except Exception as _re:
+                    import logging as _log
+                    _log.getLogger(__name__).warning(
+                        'Task %s: profile restore to %r failed: %s',
+                        task_id[:8], _prev_profile, _re,
+                    )
+
+    def _run_agent_for_task(self, task: dict, task_id: str, stream_id: str) -> None:
+        """Internal: run agent pipeline for a task and capture all events."""
+        from api.streaming import _run_agent_streaming, STREAMS, STREAMS_LOCK
 
         # Create a capture queue (same as SSE stream, but we read from it ourselves)
         q = queue.Queue()

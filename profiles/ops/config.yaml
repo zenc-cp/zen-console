@@ -1,0 +1,6 @@
+model: openrouter/xiaomi/mimo-v2-flash
+max_tokens: 1000
+temperature: 0.2
+toolsets:
+  - terminal
+  - zenops
