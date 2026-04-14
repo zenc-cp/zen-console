@@ -83,7 +83,8 @@ class Session:
             json.dumps(self.__dict__, ensure_ascii=False, indent=2),
             encoding='utf-8',
         )
-        _write_session_index()
+        # Index rebuild is lazy — triggered by all_sessions() when stale,
+        # not on every save. Saves 100-500ms per chat turn.
 
     @classmethod
     def load(cls, sid):
@@ -197,9 +198,13 @@ def all_sessions():
     for s in result:
         if not s.get('profile'):
             s['profile'] = 'default'
-    # P4: cache the result
+    # P4: cache the result and persist index for future reads
     _index_cache = list(result)
     _index_cache_time = now
+    try:
+        SESSION_INDEX_FILE.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception:
+        pass  # index write failure is non-fatal
     return result
 
 

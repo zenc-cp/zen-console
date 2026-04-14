@@ -1,28 +1,29 @@
 """
 api/model_router.py -- Auto LLM Router for Hermes WebUI
 
-Classifies user intent from the prompt and selects the best available model
-from the user's configured model list. Operates purely on keyword/heuristic
-matching -- no LLM call required, so it adds zero latency.
+Routes user messages to the best model based on intent classification.
+ALL models MUST support tool calling — Hermes requires tools for every interaction.
 
-Usage:
-    from api.model_router import auto_model_for, ROUTER_TIERS
-    model = auto_model_for("review this code for bugs")
-    # → 'openrouter/mistralai/codestral-2508'
+Rules:
+  - Default: MiniMax M2.7 (fast, cheap, tool-capable)
+  - Code-heavy: Gemma 4 31B (strong at code + tool calling)
+  - Deep reasoning: Qwen3 235B (heavyweight, only for explicitly complex tasks)
+  - Creative: Llama 4 Maverick (narrative, brainstorming)
+  - Quick: Grok 4.1 Fast (concise answers)
+  - Vision: Gemma 4 31B (multimodal)
+
+Codestral is EXCLUDED — it does not support tool calling.
 """
 
 from __future__ import annotations
-
 import re
 
 # ------------------------------------------------------------------ #
-# Available model tiers (subset of user's available_models config)
-# Each entry: model_id, tier label, description
+# Router tiers — every model here MUST support function/tool calling
 # ------------------------------------------------------------------ #
 
 ROUTER_TIERS = [
-    # Tier 0: vision (only if image attachment detected -- handled at call site)
-    # Tier 1: fast / cheap (simple Q&A, greetings, one-liners)
+    # Tier 1: default / fast (simple Q&A, greetings, general tasks)
     {
         "id": "openrouter/minimax/minimax-m2.7",
         "tier": "fast",
@@ -30,119 +31,65 @@ ROUTER_TIERS = [
         "keywords": [],
         "patterns": [
             re.compile(r"^(hi|hey|hello|yo|howdy|what'?s up|sup|greetings)\b", re.I),
-            re.compile(r"^what('?s| is)? (the )?time\b", re.I),
-            re.compile(r"^how (much|big|large|tall|old|long|far)\b", re.I),
-            re.compile(r"^what (is|are|can|could|should|does|do|will|would)[\s\?]", re.I),
-            re.compile(r"^who (am I|are you|is|was|does|did|can|should)\b", re.I),
-            re.compile(r"^can I (ask|get|have|make|do|use|see|try)\b", re.I),
-            re.compile(r"^can you (help|do|show|give|tell|explain|list)\b", re.I),
-            re.compile(r"^generate a? ?password\b", re.I),
-            re.compile(r"^roll a die\b", re.I),
-            re.compile(r"^what('?s| is)? (2|4|6|8|10|12|16|20|100)\s*\+\s*\d+\b", re.I),
             re.compile(r"^(yes|no|ok(ay)?|sure|yeah|yep|nope|lmk)\s*[!\?\.]*\s*$", re.I),
         ],
     },
-    # Tier 2: code specialist (code review, debugging, refactoring, explain code)
+    # Tier 2: code (Gemma 4 31B — strong code + full tool support)
     {
-        "id": "openrouter/mistralai/codestral-2508",
+        "id": "openrouter/google/gemma-4-31b-it",
         "tier": "code",
-        "label": "Codestral (Code)",
+        "label": "Gemma 4 31B (Code)",
         "keywords": [
-            "code", "debug", "refactor", "linter", "eslint", "prettier",
-            "python", "javascript", "typescript", "rust", "golang", "java",
-            "bug", "error", "exception", "stack trace", "traceback",
-            "import", "module", "function", "class", "variable",
-            "api", "endpoint", "route", "handler", "middleware",
-            "compile", "build", "deploy", "docker", "git", "github",
-            "test", "pytest", "unittest", "coverage", "ci/cd",
-            "regex", "sql", "query", "schema", "migration",
-            "terminal", "shell", "bash", "zsh", "cli", "script",
-            "file", "directory", "path", "symlink", "permission",
-            "html", "css", "json", "yaml", "toml", "markdown",
-            "optimize", "performance", "latency", "throughput",
-            "security", "vulnerability", "xss", "sql injection",
-            "code review", "pull request", "merge", "branch",
+            "refactor", "debug", "linter", "stack trace", "traceback",
+            "code review", "pull request", "unit test", "pytest",
         ],
         "patterns": [
-            re.compile(r"(debug|refactor|review|explain).*(code|function|class|file)\b", re.I),
-            re.compile(r"(fix|find|catch|handle).*(bug|error|exception|issue)\b", re.I),
-            re.compile(r"(write|create|generate|build).*(function|class|api|script)\b", re.I),
-            re.compile(r"(terminal|bash|shell|cmd|cli).*(command|run|execute)\b", re.I),
-            re.compile(r"(python|javascript|js|ts|rust|go|java|sql|html|css)\s", re.I),
-            re.compile(r"(import|from|require|def|class|fn|func|pub|let|const|var)\s", re.I),
-            re.compile(r"(test|spec|suite|expect|assert)\s", re.I),
-            re.compile(r"(git|github|commit|push|pull|branch|merge|PR)\b", re.I),
+            re.compile(r"(debug|refactor|review).*(code|function|class|module)\b", re.I),
+            re.compile(r"(fix|find).*(bug|error|exception)\b", re.I),
+            re.compile(r"(write|create|implement).*(function|class|api|endpoint)\b", re.I),
+            re.compile(r"(code review|PR review|pull request)", re.I),
         ],
     },
-    # Tier 3: reasoning (complex analysis, multi-step, math proofs, architecture)
+    # Tier 3: reasoning (Qwen3 235B — only for explicitly complex tasks)
     {
         "id": "openrouter/qwen/qwen3-235b-a22b-2507",
         "tier": "reasoning",
         "label": "Qwen3 235B (Reasoning)",
         "keywords": [
-            "reason", "think", "analyze", "analysis", "思考",
-            "solve", "explain", "why", "how", "compare",
-            "difference between", "pros and cons", "tradeoff",
-            "architecture", "design pattern", "system design",
-            "algorithm", "complexity", "optimization", "performance",
-            "math", "proof", "theorem", "calculate", "compute",
-            "evaluate", "assess", "judge", "decide", "recommend",
-            "strategy", "plan", "approach", "methodology",
-            "research", "investigate", "discover", "explore",
-            "hypothesis", "theory", "model", "framework",
-            "benchmark", "experiment", "ab test", "a/b test",
+            "analyze in depth", "deep analysis", "compare and contrast",
+            "system design", "architecture design", "prove", "theorem",
         ],
         "patterns": [
-            re.compile(r"(analyze|evaluate|compare|contrast|assess).*(and|vs|versus|with)\b", re.I),
-            re.compile(r"(what|how).*(would you|should I|could we|should we)\b", re.I),
-            re.compile(r"(design|architect|plan|strategy).*(for|of|to|that)\b", re.I),
-            re.compile(r"(complex|complicated|difficult|hard).*(problem|question|issue|task)\b", re.I),
-            re.compile(r"(multi.?step|multi.?step|several|multiple|different).*(task|step|part|phase)\b", re.I),
-            re.compile(r"(prove|demonstrate|show that|illustrate)\b", re.I),
-            re.compile(r"(architecture|system).*(design|overview|diagram|blueprint)\b", re.I),
+            re.compile(r"(deep|thorough|comprehensive)\s+(analysis|review|audit|dive)\b", re.I),
+            re.compile(r"(design|architect)\s+(a |the )?(system|architecture|platform)\b", re.I),
+            re.compile(r"(prove|demonstrate|mathematical)\b", re.I),
         ],
     },
-    # Tier 4: creative (stories, songs, marketing copy, brainstorming)
+    # Tier 4: creative (Llama 4 Maverick)
     {
         "id": "openrouter/meta-llama/llama-4-maverick",
         "tier": "creative",
         "label": "Llama 4 Maverick (Creative)",
         "keywords": [
-            "write", "creative", "story", "poem", "song", "rhyme",
-            "blog", "post", "article", "copywriting", "marketing",
-            "brainstorm", "idea", "brainstorming", "creative",
-            "narrative", "fiction", "character", "plot", "scene",
-            "script", "screenplay", "dialogue", "monologue",
-            "advertisement", "ad copy", "tagline", "slogan",
-            "email template", "outreach", "cold email", "pitch",
-            "presentation", "slides", "pitch deck",
-            "haiku", "limerick", "verse", "lyrics",
+            "story", "poem", "song", "lyrics", "haiku",
+            "brainstorm", "creative writing",
         ],
         "patterns": [
-            re.compile(r"(write|compose|generate|create).*(story|poem|song|lyrics|haiku)\b", re.I),
-            re.compile(r"(brainstorm|ideate|come up with).*(ideas?|concepts?|options?)\b", re.I),
-            re.compile(r"(marketing|copywriting|advertisement|ad).*(copy|text|content|script)\b", re.I),
-            re.compile(r"(blog |article |post |tweet ).*(about|on|for)\b", re.I),
+            re.compile(r"(write|compose).*(story|poem|song|lyrics|haiku)\b", re.I),
+            re.compile(r"(brainstorm|ideate).*(ideas?|concepts?)\b", re.I),
         ],
     },
-    # Tier 5: Grok fast (concise answers, quick summaries, one-shot tasks)
+    # Tier 5: Grok fast (quick answers)
     {
         "id": "openrouter/x-ai/grok-4.1-fast",
         "tier": "grok",
         "label": "Grok 4.1 Fast",
-        "keywords": [
-            "quick", "brief", "short", "concise", "summary", "summarize",
-            "tl dr", "tldr", "one shot", "one-shot", "quick question",
-            "quick answer", "just", "simply", "basically",
-        ],
+        "keywords": [],
         "patterns": [
-            re.compile(r"^(quick|brief|short|concise|simply|basically|just)\s", re.I),
-            re.compile(r"(summarize|tl dr|tldr|summary of)\b", re.I),
-            re.compile(r"^(what|who|when|where|why|how)\s.+\?", re.I),
+            re.compile(r"(summarize|tl ?dr|summary of)\b", re.I),
         ],
     },
-    # Tier 6: vision (if user attaches an image -- detected at call site via attachments)
-    # This is handled by the attachment flag, not pattern matching
+    # Tier 6: vision (image attachments)
     {
         "id": "openrouter/google/gemma-4-31b-it",
         "tier": "vision",
@@ -153,25 +100,21 @@ ROUTER_TIERS = [
     },
 ]
 
-# Default fallback model (MiniMax M2.7)
 DEFAULT_ROUTER_MODEL = "openrouter/minimax/minimax-m2.7"
 
 
 def _score_tier(tier: dict, prompt: str, has_attachment: bool) -> float:
-    """Score how well a tier matches the prompt. Higher = better."""
-    # Vision tier requires attachment
+    """Score how well a tier matches. Higher = better match."""
     if tier.get("attachment_required"):
         return 100.0 if has_attachment else 0.0
 
     score = 0.0
     prompt_lower = prompt.lower()
 
-    # Keyword matches (each keyword = 1 point)
     for kw in tier.get("keywords", []):
         if kw.lower() in prompt_lower:
             score += 1.0
 
-    # Pattern matches (each pattern = 3 points -- stronger signal)
     for pat in tier.get("patterns", []):
         if pat.search(prompt):
             score += 3.0
@@ -180,34 +123,23 @@ def _score_tier(tier: dict, prompt: str, has_attachment: bool) -> float:
 
 
 def auto_model_for(prompt: str, has_attachment: bool = False) -> str:
-    """
-    Classify the user prompt and return the best matching model ID.
-
-    Args:
-        prompt: The user's message text
-        has_attachment: True if any file/image was attached (triggers vision tier)
-
-    Returns:
-        Model ID string (e.g. 'openrouter/mistralai/codestral-2508')
-    """
+    """Classify prompt intent and return the best tool-capable model."""
     if not prompt or not prompt.strip():
         return DEFAULT_ROUTER_MODEL
 
-    prompt = prompt.strip()
-
-    # Score all tiers
     best_score = -1.0
     best_tier_id = DEFAULT_ROUTER_MODEL
 
     for tier in ROUTER_TIERS:
-        score = _score_tier(tier, prompt, has_attachment)
+        score = _score_tier(tier, prompt.strip(), has_attachment)
         if score > best_score:
             best_score = score
             best_tier_id = tier["id"]
 
-    # Threshold: require at least 1 keyword or 1 pattern match to override fast/default
-    # If no tier triggered, keep the default
-    if best_score < 1.0:
+    # Require strong signal (3+ points = at least one pattern match)
+    # to override default. Prevents weak keyword matches from routing
+    # every technical message to a specialist model.
+    if best_score < 3.0:
         return DEFAULT_ROUTER_MODEL
 
     return best_tier_id

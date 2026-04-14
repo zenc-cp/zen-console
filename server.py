@@ -87,6 +87,32 @@ def main():
     except Exception as e:
         print(f'  [tasks] Warning: background task system failed to start: {e}', flush=True)
 
+    # Start stream reaper (cleans up zombie SSE streams every 60s)
+    from api.config import STREAMS, STREAMS_LOCK, CANCEL_FLAGS
+    import threading as _thr
+    def _stream_reaper():
+        import time as _t
+        while True:
+            _t.sleep(60)
+            now = _t.time()
+            stale = []
+            with STREAMS_LOCK:
+                for sid, q in list(STREAMS.items()):
+                    # Stream is stale if queue is empty and was created >5 min ago
+                    created = getattr(q, '_created', 0)
+                    if not created:
+                        q._created = now
+                        continue
+                    if now - created > 300 and q.empty():
+                        stale.append(sid)
+                for sid in stale:
+                    STREAMS.pop(sid, None)
+                    CANCEL_FLAGS.pop(sid, None)
+            if stale:
+                print(f'[webui] stream reaper: cleaned {len(stale)} zombie stream(s)', flush=True)
+    _reaper = _thr.Thread(target=_stream_reaper, daemon=True, name='stream-reaper')
+    _reaper.start()
+
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f'  Hermes Web UI listening on http://{HOST}:{PORT}', flush=True)
     if HOST == '127.0.0.1':

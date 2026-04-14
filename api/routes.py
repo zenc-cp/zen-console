@@ -824,7 +824,7 @@ def _handle_workspace_watch(handler, parsed):
         return bad(handler, 'workspace query param required')
 
     stream_id = uuid.uuid4().hex
-    q = queue.Queue()
+    q = queue.Queue(); q._created = __import__("time").time()
     with STREAMS_LOCK:
         STREAMS[stream_id] = q
 
@@ -1079,7 +1079,7 @@ def _handle_chat_start(handler, body):
     s.workspace = workspace; s.model = model; s.save()
     set_last_workspace(workspace)
     stream_id = uuid.uuid4().hex
-    q = queue.Queue()
+    q = queue.Queue(); q._created = __import__("time").time()
     with STREAMS_LOCK: STREAMS[stream_id] = q
     thr = threading.Thread(
         target=_run_agent_streaming,
