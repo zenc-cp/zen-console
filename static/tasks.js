@@ -280,10 +280,18 @@ async function refreshTaskList() {
         var res = await api('/api/tasks?limit=20');
         var el = document.getElementById('taskListContent');
         if (el && res.tasks) {
-            if (res.tasks.length === 0) {
+            // Filter: show active tasks + recently finished (last 5 min)
+            var now = Date.now() / 1000;
+            var visible = res.tasks.filter(function(t) {
+                if (t.status === 'queued' || t.status === 'running') return true;
+                // Show completed/failed/cancelled only if < 5 min old
+                var age = now - (t.updated_at || t.created_at || 0);
+                return age < 300;
+            });
+            if (visible.length === 0) {
                 el.innerHTML = '<div style="text-align:center;color:#475569;padding:1rem;">No background tasks</div>';
             } else {
-                el.innerHTML = res.tasks.map(renderTaskCard).join('');
+                el.innerHTML = visible.map(renderTaskCard).join('');
             }
             // Resume polling for active tasks
             res.tasks.forEach(function (t) {
