@@ -339,12 +339,12 @@ def handle_get(handler, parsed):
         return handle_workspace_watch(handler, parsed)
 
     if parsed.path == '/api/skills':
-        from api.skill_evolution import handle_skill_list
-        return handle_skill_list(handler, parsed)
+        from api.skill_evolution import handle_skills_list
+        return handle_skills_list(handler, parsed)
 
     if parsed.path == '/api/skills/health':
-        from api.skill_evolution import handle_skill_health
-        return handle_skill_health(handler, parsed)
+        from api.skill_evolution import handle_skills_health
+        return handle_skills_health(handler, parsed)
 
     return False  # 404
 
@@ -384,7 +384,6 @@ def handle_post(handler, parsed):
     # B6: Skill evolution — list + trigger zen_evolve for a skill
     if parsed.path == '/api/skills/evolve':
         body = read_body(handler)
-        return _handle_skill_evolve(handler, body)
 
     if parsed.path == '/api/upload':
         return handle_upload(handler)
@@ -461,8 +460,8 @@ def handle_post(handler, parsed):
         return handle_session_summarize(handler, body)
 
     if parsed.path == '/api/skills/evolve':
-        from api.skill_evolution import handle_skill_evolve
-        return handle_skill_evolve(handler, body)
+        from api.skill_evolution import handle_skills_evolve
+        return handle_skills_evolve(handler, body)
 
     if parsed.path == '/api/chat':
         return _handle_chat_sync(handler, body)
@@ -1699,7 +1698,7 @@ def _handle_session_summarize(handler, body):
 
 
 # B6: Skill evolution — list skills from zeroclaw-skills + claw/zeroclaw-skills + ~/.hermes/skills
-def _handle_skill_evolve(handler, body):
+def _handle_skills_evolve(handler, body):
     """POST /api/skills/evolve — run zen_evolve on a skill and return updated docs."""
     import subprocess
 
