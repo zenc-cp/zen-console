@@ -366,7 +366,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             emit_agent_status(put, 'thinking')
             emit_context_info(put, input_tokens=0, model=model)
             # Watchdog: kill agent if it takes >120s (prevents thread exhaustion)
-            _agent_timeout = 180
+            _agent_timeout = 300  # 5 min (was 180s, caused timeouts on complex tasks)
             _agent_result = [None]
             _agent_error = [None]
             def _run_agent_inner():

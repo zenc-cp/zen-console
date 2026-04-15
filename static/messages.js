@@ -89,7 +89,7 @@ async function send(){
     delete INFLIGHT[activeSid];
     stopApprovalPolling();
     // Only hide approval card if it belongs to the session that just finished
-    if(!_approvalSessionId || _approvalSessionId===activeSid) hideApprovalCard();removeThinking();
+    if(!_approvalSessionId || _approvalSessionId===activeSid) hideApprovalCard();persistThinking();
     S.messages.push({role:'assistant',content:`**Error:** ${e.message}`});
     renderMessages();setBusy(false);setStatus('Error: '+e.message);
     return;
@@ -105,7 +105,7 @@ async function send(){
 
   function ensureAssistantRow(){
     if(assistantRow)return;
-    removeThinking();
+    persistThinking();
     const tr=$('toolRunningRow');if(tr)tr.remove();
     $('emptyState').style.display='none';
     assistantRow=document.createElement('div');assistantRow.className='msg-row';
@@ -175,7 +175,7 @@ async function send(){
         setStatus(`${d.name}${d.preview?' · '+d.preview.slice(0,55):''}`);
       }
       if(!S.session||S.session.session_id!==activeSid) return;
-      removeThinking();
+      persistThinking();
       const oldRow=$('toolRunningRow');if(oldRow)oldRow.remove();
       const tc={name:d.name, preview:d.preview||'', args:d.args||{}, snippet:'', done:false};
       S.toolCalls.push(tc);
@@ -346,7 +346,7 @@ async function send(){
       if(!_approvalSessionId||_approvalSessionId===activeSid) hideApprovalCard();
       if(S.session&&S.session.session_id===activeSid){
         S.activeStreamId=null;const _cbe=$('btnCancel');if(_cbe)_cbe.style.display='none';
-        clearLiveToolCards();if(!assistantText)removeThinking();
+        clearLiveToolCards();if(!assistantText)persistThinking();
         try{
           const d=JSON.parse(e.data);
           const isRateLimit=d.type==='rate_limit';
@@ -365,7 +365,7 @@ async function send(){
         try{const d=JSON.parse(e.data);trackBackgroundError(activeSid,_errTitle,d.message||'Error');}
         catch(_){trackBackgroundError(activeSid,_errTitle,'Error');}
       }
-      if(!S.session||!INFLIGHT[S.session.session_id]){setBusy(false);setStatus('');}
+      setBusy(false);setStatus('');
     });
 
     source.addEventListener('warning',e=>{
@@ -411,7 +411,7 @@ async function send(){
         S.activeStreamId=null;const _cbc=$('btnCancel');if(_cbc)_cbc.style.display='none';
       }
       if(S.session&&S.session.session_id===activeSid){
-        clearLiveToolCards();if(!assistantText)removeThinking();
+        clearLiveToolCards();if(!assistantText)persistThinking();
         // Feature 2: clear activity items on cancel
         if(typeof clearActivityItems==='function') clearActivityItems();
         // Feature 6: clear live todos on cancel
@@ -419,7 +419,7 @@ async function send(){
         S.messages.push({role:'assistant',content:'*Task cancelled.*'});renderMessages();
       }
       renderSessionList();
-      if(!S.session||!INFLIGHT[S.session.session_id]){setBusy(false);setStatus('');}
+      setBusy(false);setStatus('');
     });
   }
 
@@ -428,7 +428,7 @@ async function send(){
     if(!_approvalSessionId||_approvalSessionId===activeSid) hideApprovalCard();
     if(S.session&&S.session.session_id===activeSid){
       S.activeStreamId=null;const _cbe=$('btnCancel');if(_cbe)_cbe.style.display='none';
-      clearLiveToolCards();if(!assistantText)removeThinking();
+      clearLiveToolCards();if(!assistantText)persistThinking();
       S.messages.push({role:'assistant',content:'**Error:** Connection lost', _errorCard:true, _errorMsg:'Connection lost'});renderMessages();
     }else{
       // User switched away — show background error banner
@@ -438,7 +438,8 @@ async function send(){
         trackBackgroundError(activeSid,_errTitle,'Connection lost');
       }
     }
-    if(!S.session||!INFLIGHT[S.session.session_id]){setBusy(false);setStatus('Error: Connection lost');}
+    // Always release busy state on stream error — prevents queue from getting stuck
+    setBusy(false);setStatus('Error: Connection lost');
   }
 
   // Close any previous stream before starting a new one

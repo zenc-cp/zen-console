@@ -1,6 +1,7 @@
 const S={session:null,messages:[],entries:[],busy:false,pendingFiles:[],toolCalls:[],activeStreamId:null,currentDir:'.',activeProfile:'default'};
 const INFLIGHT={};  // keyed by session_id while request in-flight
 const MSG_QUEUE=[];  // messages queued while a request is in-flight
+let _busyTimer=null;  // safety timeout to prevent permanent busy state
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -229,6 +230,9 @@ function updateSendBtn(){
   }
 }
 function setBusy(v){
+  // Safety timeout: if busy for >5min, force-release to prevent queue stuck
+  if(_busyTimer){clearTimeout(_busyTimer);_busyTimer=null;}
+  if(v){_busyTimer=setTimeout(function(){console.warn('Busy safety timeout (5min) - force releasing');setBusy(false);},300000);}
   S.busy=v;
   $('btnSend').disabled=v;
   updateSendBtn();
@@ -815,6 +819,22 @@ function appendThinking(){
   $('msgInner').appendChild(row);scrollToBottom();
 }
 function removeThinking(){const el=$('thinkingRow');if(el)el.remove();}
+function persistThinking(){
+  var el=$('thinkingRow');
+  if(el && _liveThinkingBuffer && _liveThinkingBuffer.trim()){
+    var card=document.createElement('div');
+    card.className='msg-row thinking-card-row';
+    var inner=document.createElement('div');inner.className='thinking-card';
+    var header=document.createElement('div');header.className='thinking-card-header';
+    header.onclick=function(){this.parentElement.classList.toggle('open')};
+    header.innerHTML='<span class="thinking-card-icon">&#128173;</span><span class="thinking-card-label">Thought process</span><span class="thinking-card-toggle">&#9654;</span>';
+    var body=document.createElement('div');body.className='thinking-card-body';
+    var pre=document.createElement('pre');pre.textContent=_liveThinkingBuffer;
+    body.appendChild(pre);inner.appendChild(header);inner.appendChild(body);card.appendChild(inner);
+    el.replaceWith(card);
+  } else if(el){ el.remove(); }
+  clearLiveThinkingBuffer();
+}
 
 // Live thinking card: shows thinking text in real-time during SSE stream
 let _liveThinkingBuffer='';
