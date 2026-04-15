@@ -1568,3 +1568,36 @@ function loadTodos() {
     panel.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0;opacity:.6">No task items found.</div>';
   }
 }
+
+
+// ── Multica: Status dot + context + cost rendering ───────────────────────
+var _statusDotEl = null;
+function updateAgentStatusDot(status, detail) {
+  var row = document.querySelector('.msg-row.assistant:last-of-type');
+  if (!row) return;
+  var roleEl = row.querySelector('.msg-role');
+  if (!roleEl) return;
+  if (!_statusDotEl) {
+    _statusDotEl = document.createElement('span');
+    _statusDotEl.className = 'agent-status-dot idle';
+    roleEl.insertBefore(_statusDotEl, roleEl.firstChild);
+  }
+  _statusDotEl.className = 'agent-status-dot ' + status;
+  if (detail) _statusDotEl.title = detail;
+}
+function renderContextBadge(row, tokens, modelLabel) {
+  if (row.querySelector('.context-badge')) return;
+  var badge = document.createElement('div');
+  badge.className = 'context-badge';
+  var tokStr = tokens >= 1000 ? (tokens/1000).toFixed(0)+'K' : String(tokens || '...');
+  badge.textContent = 'Context: ' + tokStr + ' tokens · ' + (modelLabel || 'model');
+  var body = row.querySelector('.msg-body');
+  if (body) body.prepend(badge); else row.prepend(badge);
+}
+function renderCostBadge(row, inputFmt, outputFmt, costStr) {
+  var badge = row.querySelector('.cost-badge');
+  if (!badge) { badge = document.createElement('div'); badge.className = 'cost-badge'; row.appendChild(badge); }
+  var text = (inputFmt||'?') + ' in · ' + (outputFmt||'?') + ' out';
+  if (costStr) text += ' · ' + costStr;
+  badge.textContent = text;
+}

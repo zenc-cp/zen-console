@@ -244,7 +244,26 @@ async function send(){
       } catch(_) {}
     });
 
-        source.addEventListener('done',e=>{
+        // ── Multica: status dot + context + cost ────────────────────────────
+    source.addEventListener('agent_status', function(e) {
+      try { var d = JSON.parse(e.data); updateAgentStatusDot(d.status, d.detail || ''); } catch(_) {}
+    });
+    source.addEventListener('context_info', function(e) {
+      try {
+        var d = JSON.parse(e.data);
+        var row = document.querySelector('.msg-row.assistant:last-of-type');
+        if (row) renderContextBadge(row, d.input_tokens, d.model_label || d.model);
+      } catch(_) {}
+    });
+    source.addEventListener('cost', function(e) {
+      try {
+        var d = JSON.parse(e.data);
+        var row = document.querySelector('.msg-row.assistant:last-of-type');
+        if (row) renderCostBadge(row, d.input_fmt, d.output_fmt, d.cost_str);
+      } catch(_) {}
+    });
+
+    source.addEventListener('done',e=>{
       source.close();
       _doneProcessed=true;  // P1: blocks stale RAF callbacks from firing after DOM rebuild
       const d=JSON.parse(e.data);

@@ -1091,3 +1091,14 @@ body.resizing{user-select:none;cursor:col-resize;}
 #todoPanel .todo-panel-header {
   border-radius: 8px 8px 0 0;
 }
+
+/* ── Multica: Agent status dot ── */
+.agent-status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:4px; vertical-align:middle; transition:background-color 0.25s ease; }
+.agent-status-dot.idle { background:#666; }
+.agent-status-dot.thinking { background:#C9A84C; box-shadow:0 0 4px rgba(201,168,76,.6); }
+.agent-status-dot.tool_use { background:#4a9eff; box-shadow:0 0 4px rgba(74,158,255,.6); }
+.agent-status-dot.writing { background:#fff; box-shadow:0 0 3px rgba(255,255,255,.5); }
+.agent-status-dot.error { background:#ff4444; }
+.context-badge { display:inline-block; font-size:10px; color:rgba(255,255,255,0.35); background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.07); border-radius:6px; padding:2px 8px; margin-bottom:8px; }
+.cost-badge { font-size:11px; color:var(--muted); opacity:0.6; margin-top:4px; }
+.cost-badge:hover { opacity:1; }

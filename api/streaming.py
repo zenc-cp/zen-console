@@ -20,6 +20,13 @@ import queue
 import re
 import sys
 import threading
+
+# Multica structured streaming events
+try:
+    from api.streaming_events import emit_agent_status, emit_context_info, emit_cost
+except ImportError:
+    emit_agent_status = emit_context_info = emit_cost = lambda *a, **kw: None
+
 import time
 import traceback
 from pathlib import Path
@@ -356,6 +363,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     print(f"[webui] memory: injected index.md ({len(_index_text)} chars)", flush=True)
             except Exception as _mem_err:
                 print(f"[webui] memory: index injection skipped ({_mem_err})", flush=True)
+            emit_agent_status(put, 'thinking')
+            emit_context_info(put, input_tokens=0, model=model)
             # Watchdog: kill agent if it takes >120s (prevents thread exhaustion)
             _agent_timeout = 180
             _agent_result = [None]
@@ -462,6 +471,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                             break
             s.save()
             usage = {'input_tokens': input_tokens, 'output_tokens': output_tokens, 'estimated_cost': estimated_cost}
+            emit_cost(put, usage.get("input_tokens",0), usage.get("output_tokens",0), model=model, cost_usd=usage.get("estimated_cost",0))
+            emit_agent_status(put, "idle")
             put('done', {'session': s.compact() | {'messages': s.messages, 'tool_calls': tool_calls}, 'usage': usage})
 
             # ── Tier 1 SessionEnd: spawn flush.py detached ────────────────
