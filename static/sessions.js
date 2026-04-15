@@ -7,77 +7,151 @@ const ICONS={
   unarchive:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="2" width="13" height="3" rx="1"/><path d="M2.5 5v8h11V5"/><polyline points="6.5,7 8,5.5 9.5,7"/></svg>',
   dup:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="4.5" y="4.5" width="8.5" height="8.5" rx="1.5"/><path d="M3 11.5V3h8.5"/></svg>',
   trash:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3.5 4.5h9M6.5 4.5V3h3v1.5M4.5 4.5v8.5h7v-8.5"/><line x1="7" y1="7" x2="7" y2="11"/><line x1="9" y1="7" x2="9" y2="11"/></svg>',
+  more:'<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" stroke="none"><circle cx="8" cy="3" r="1.25"/><circle cx="8" cy="8" r="1.25"/><circle cx="8" cy="13" r="1.25"/></svg>',
 };
 
 async function newSession(flash){
-  MSG_QUEUE.length=0;updateQueueBadge();
+  updateQueueBadge();
   S.toolCalls=[];
   clearLiveToolCards();
-  if(window._stopWorkspaceWatch) window._stopWorkspaceWatch();  // B4: stop old watch
   // Use profile default workspace for new sessions after a profile switch (one-shot),
   // otherwise inherit from the current session (or let server pick the default)
   const inheritWs=S._profileDefaultWorkspace||(S.session?S.session.workspace:null);
   S._profileDefaultWorkspace=null; // consume — only applies to the first new session after switch
   const data=await api('/api/session/new',{method:'POST',body:JSON.stringify({model:$('modelSelect').value,workspace:inheritWs})});
   S.session=data.session;S.messages=data.session.messages||[];
+  S.lastUsage={...(data.session.last_usage||{})};
   if(flash)S.session._flash=true;
   localStorage.setItem('hermes-webui-session',S.session.session_id);
-  syncTopbar();loadDir('.');renderMessages();  // P3: fire-and-forget — don't block render pipeline
+  // Reset per-session visual state: a fresh chat is idle even if another
+  // conversation is still streaming in the background.
+  S.busy=false;
+  S.activeStreamId=null;
+  updateSendBtn();
+  const _cb=$('btnCancel');if(_cb)_cb.style.display='none';
+  setStatus('');
+  setComposerStatus('');
+  updateQueueBadge(S.session.session_id);
+  syncTopbar();renderMessages();loadDir('.');
   // don't call renderSessionList here - callers do it when needed
 }
 
 async function loadSession(sid){
   stopApprovalPolling();hideApprovalCard();
-  // Close any active SSE stream from the previous chat — prevents stale tokens
-  // from the old stream writing to DOM elements of the new chat after switch.
-  if(typeof _activeEs !== 'undefined' && _activeEs){_activeEs.close();_activeEs=null;}
-  // B4: stop workspace watcher when switching sessions
-  if(window._stopWorkspaceWatch) window._stopWorkspaceWatch();
   const data=await api(`/api/session?session_id=${encodeURIComponent(sid)}`);
   S.session=data.session;
+  S.lastUsage={...(data.session.last_usage||{})};
   localStorage.setItem('hermes-webui-session',S.session.session_id);
-  // B9: sanitize empty assistant messages that can appear when agent only ran tool calls
-  data.session.messages=(data.session.messages||[]).filter(m=>{
-    if(!m||!m.role)return false;
-    if(m.role==='tool')return false;
-    if(m.role==='assistant'){let c=m.content||'';if(Array.isArray(c))c=c.filter(p=>p&&p.type==='text').map(p=>p.text||'').join('');return String(c).trim().length>0;}
-    return true;
-  });
+  // B9: sanitize empty assistant messages (PR #402) — build index map to remap
+  // session-level tool_calls.assistant_msg_idx to the new sanitized positions.
+  const allMsgs = data.session.messages || [];
+  const sanitized = [];
+  const origIdxToSanitizedIdx = {};
+  let lastKeptAsstIdx = -1;
+  for (let i = 0; i < allMsgs.length; i++) {
+    const m = allMsgs[i];
+    if (!m || !m.role) continue;
+    if (m.role === 'tool') continue;
+    if (m.role === 'assistant') {
+      let c = m.content || '';
+      if (Array.isArray(c)) c = c.filter(p => p && p.type === 'text').map(p => p.text || '').join('');
+      if (!String(c).trim().length) { continue; }  // empty assistant — skip
+      lastKeptAsstIdx = sanitized.length;
+    }
+    origIdxToSanitizedIdx[i] = sanitized.length;
+    sanitized.push(m);
+  }
+  if (data.session.tool_calls && data.session.tool_calls.length) {
+    for (const tc of data.session.tool_calls) {
+      if (!tc || tc.assistant_msg_idx === undefined) continue;
+      const origIdx = tc.assistant_msg_idx;
+      tc.assistant_msg_idx = (origIdx in origIdxToSanitizedIdx)
+        ? origIdxToSanitizedIdx[origIdx]
+        : (lastKeptAsstIdx >= 0 ? lastKeptAsstIdx : -1);
+    }
+  }
+  data.session.messages = sanitized;
+  const activeStreamId=data.session.active_stream_id||null;
+  if(!INFLIGHT[sid]&&activeStreamId&&typeof loadInflightState==='function'){
+    const stored=loadInflightState(sid, activeStreamId);
+    if(stored){
+      INFLIGHT[sid]={
+        messages:Array.isArray(stored.messages)&&stored.messages.length?stored.messages:[...(data.session.messages||[])],
+        uploaded:Array.isArray(stored.uploaded)?stored.uploaded:[...(data.session.pending_attachments||[])],
+        toolCalls:Array.isArray(stored.toolCalls)?stored.toolCalls:[],
+        reattach:true,
+      };
+    }
+  }
   if(INFLIGHT[sid]){
     S.messages=INFLIGHT[sid].messages;
-    // Restore live tool cards for this in-flight session
+    S.toolCalls=(INFLIGHT[sid].toolCalls||[]);
+    S.busy=true;
+    syncTopbar();renderMessages();appendThinking();loadDir('.');
     clearLiveToolCards();
+    if(typeof placeLiveToolCardsHost==='function') placeLiveToolCardsHost();
     for(const tc of (S.toolCalls||[])){
       if(tc&&tc.name) appendLiveToolCard(tc);
     }
-    syncTopbar();loadDir('.');renderMessages();appendThinking();  // P3: fire-and-forget
-    setBusy(true);setStatus('Hermes is thinking\u2026');
+    setBusy(true);setComposerStatus('');
     startApprovalPolling(sid);
-  }else{
-    MSG_QUEUE.length=0;updateQueueBadge();  // clear queue for the viewed session
-    S.messages=data.session.messages||[];
-    S.toolCalls=(data.session.tool_calls||[]).map(tc=>({...tc,done:true}));
-    // P5: attach session-level usage to the last assistant message for display
-    const u=data.session;
-    if(u&&(u.input_tokens||u.output_tokens||u.estimated_cost)&&S.messages.length){
-      const lastAsst=[...S.messages].reverse().find(m=>m.role==='assistant');
-      if(lastAsst) lastAsst._usage={input_tokens:u.input_tokens||0,output_tokens:u.output_tokens||0,estimated_cost:u.estimated_cost};
+    S.activeStreamId=activeStreamId;
+    const _cb=$('btnCancel');if(_cb&&activeStreamId)_cb.style.display='inline-flex';
+    if(INFLIGHT[sid].reattach&&activeStreamId&&typeof attachLiveStream==='function'){
+      INFLIGHT[sid].reattach=false;
+      attachLiveStream(sid, activeStreamId, data.session.pending_attachments||[], {reconnecting:true});
     }
-    // Reset per-session visual state: the viewed session is idle even if another
-    // session's stream is still running in the background.
-    // We directly update the DOM instead of calling setBusy(false), because
-    // setBusy(false) drains MSG_QUEUE which we don't want here.
-    S.busy=false;
-    S.activeStreamId=null;
-    $('btnSend').disabled=false;
-    $('btnSend').style.opacity='1';
-    const _dots=$('activityDots');if(_dots)_dots.style.display='none';
-    const _cb=$('btnCancel');if(_cb)_cb.style.display='none';
-    setStatus('');
+  }else{
+    updateQueueBadge(sid);
+    S.messages=data.session.messages||[];
+    const pendingMsg=typeof getPendingSessionMessage==='function'?getPendingSessionMessage(data.session):null;
+    if(pendingMsg) S.messages.push(pendingMsg);
+    // Fix (PR #402): do NOT pre-fill S.toolCalls from session-level tool_calls —
+    // those have stale assistant_msg_idx values after B9 sanitization. Instead,
+    // set S.toolCalls=[] and let renderMessages() derive them from per-message
+    // tool_calls (which already have correct sanitized-array indices).
+    S.toolCalls=[];
     clearLiveToolCards();
-    syncTopbar();loadDir('.');renderMessages();highlightCode();  // P3: fire-and-forget
-    // B4: start workspace watcher for this session's workspace
-    if(window._startWorkspaceWatch && S.session) window._startWorkspaceWatch(S.session.workspace);
+    if(activeStreamId){
+      S.busy=true;
+      S.activeStreamId=activeStreamId;
+      updateSendBtn();
+      const _cb=$('btnCancel');if(_cb)_cb.style.display='inline-flex';
+      setStatus('');
+      setComposerStatus('');
+      syncTopbar();renderMessages();appendThinking();loadDir('.');
+      updateQueueBadge(sid);
+      startApprovalPolling(sid);
+      if(typeof attachLiveStream==='function') attachLiveStream(sid, activeStreamId, data.session.pending_attachments||[], {reconnecting:true});
+      else if(typeof watchInflightSession==='function') watchInflightSession(sid, activeStreamId);
+    }else{
+      // Reset per-session visual state: the viewed session is idle even if another
+      // session's stream is still running in the background.
+      // We directly update the DOM instead of calling setBusy(false), because
+      // setBusy(false) drains the viewed session's queued follow-up turns.
+      S.busy=false;
+      S.activeStreamId=null;
+      updateSendBtn();
+      const _cb=$('btnCancel');if(_cb)_cb.style.display='none';
+      setStatus('');
+      setComposerStatus('');
+      updateQueueBadge(sid);
+      syncTopbar();renderMessages();highlightCode();loadDir('.');
+    }
+  }
+  // Sync context usage indicator from session data
+  const _s=S.session;
+  if(_s&&typeof _syncCtxIndicator==='function'){
+    const u=S.lastUsage||{};
+    const _pick=(latest,stored,dflt=0)=>latest!=null?latest:(stored!=null?stored:dflt);
+    _syncCtxIndicator({
+      input_tokens:      _pick(u.input_tokens,      _s.input_tokens),
+      output_tokens:     _pick(u.output_tokens,     _s.output_tokens),
+      estimated_cost:    _pick(u.estimated_cost,    _s.estimated_cost),
+      context_length:    _pick(u.context_length,    _s.context_length),
+      last_prompt_tokens:_pick(u.last_prompt_tokens,_s.last_prompt_tokens),
+      threshold_tokens:  _pick(u.threshold_tokens,  _s.threshold_tokens),
+    });
   }
 }
 
@@ -87,6 +161,164 @@ let _showArchived = false;  // toggle to show archived sessions
 let _allProjects = [];  // cached project list
 let _activeProject = null;  // project_id filter (null = show all)
 let _showAllProfiles = false;  // false = filter to active profile only
+let _sessionActionMenu = null;
+let _sessionActionAnchor = null;
+let _sessionActionSessionId = null;
+
+function closeSessionActionMenu(){
+  if(_sessionActionMenu){
+    _sessionActionMenu.remove();
+    _sessionActionMenu = null;
+  }
+  if(_sessionActionAnchor){
+    _sessionActionAnchor.classList.remove('active');
+    const row=_sessionActionAnchor.closest('.session-item');
+    if(row) row.classList.remove('menu-open');
+    _sessionActionAnchor = null;
+  }
+  _sessionActionSessionId = null;
+}
+
+function _positionSessionActionMenu(anchorEl){
+  if(!_sessionActionMenu || !anchorEl) return;
+  const rect=anchorEl.getBoundingClientRect();
+  const menuW=Math.min(280, Math.max(220, _sessionActionMenu.scrollWidth || 220));
+  let left=rect.right-menuW;
+  if(left<8) left=8;
+  if(left+menuW>window.innerWidth-8) left=window.innerWidth-menuW-8;
+  _sessionActionMenu.style.left=left+'px';
+  _sessionActionMenu.style.top='8px';
+  const menuH=_sessionActionMenu.offsetHeight || 0;
+  let top=rect.bottom+6;
+  if(top+menuH>window.innerHeight-8 && rect.top>menuH+12){
+    top=rect.top-menuH-6;
+  }
+  if(top<8) top=8;
+  _sessionActionMenu.style.top=top+'px';
+}
+
+function _buildSessionAction(label, meta, icon, onSelect, extraClass=''){
+  const opt=document.createElement('button');
+  opt.type='button';
+  opt.className='ws-opt session-action-opt'+(extraClass?` ${extraClass}`:'');
+  opt.innerHTML=
+    `<span class="ws-opt-action">`
+      + `<span class="ws-opt-icon">${icon}</span>`
+      + `<span class="session-action-copy">`
+        + `<span class="ws-opt-name">${esc(label)}</span>`
+        + (meta?`<span class="session-action-meta">${esc(meta)}</span>`:'')
+      + `</span>`
+    + `</span>`;
+  opt.onclick=async(e)=>{
+    e.preventDefault();
+    e.stopPropagation();
+    await onSelect();
+  };
+  return opt;
+}
+
+function _openSessionActionMenu(session, anchorEl){
+  if(_sessionActionMenu && _sessionActionSessionId===session.session_id && _sessionActionAnchor===anchorEl){
+    closeSessionActionMenu();
+    return;
+  }
+  closeSessionActionMenu();
+  const menu=document.createElement('div');
+  menu.className='session-action-menu open';
+  menu.appendChild(_buildSessionAction(
+    session.pinned?'Unpin conversation':'Pin conversation',
+    session.pinned?'Remove from the pinned section':'Keep this conversation at the top',
+    session.pinned?ICONS.pin:ICONS.unpin,
+    async()=>{
+      closeSessionActionMenu();
+      const newPinned=!session.pinned;
+      try{
+        await api('/api/session/pin',{method:'POST',body:JSON.stringify({session_id:session.session_id,pinned:newPinned})});
+        session.pinned=newPinned;
+        if(S.session&&S.session.session_id===session.session_id) S.session.pinned=newPinned;
+        renderSessionList();
+      }catch(err){showToast('Pin failed: '+err.message);}
+    },
+    session.pinned?'is-active':''
+  ));
+  menu.appendChild(_buildSessionAction(
+    'Move to project',
+    session.project_id?'Change which project this conversation belongs to':'Assign this conversation to a project',
+    ICONS.folder,
+    async()=>{
+      closeSessionActionMenu();
+      _showProjectPicker(session, anchorEl);
+    }
+  ));
+  menu.appendChild(_buildSessionAction(
+    session.archived?'Restore conversation':'Archive conversation',
+    session.archived?'Bring this conversation back into the main list':'Hide this conversation until archived is shown',
+    session.archived?ICONS.unarchive:ICONS.archive,
+    async()=>{
+      closeSessionActionMenu();
+      try{
+        await api('/api/session/archive',{method:'POST',body:JSON.stringify({session_id:session.session_id,archived:!session.archived})});
+        session.archived=!session.archived;
+        if(S.session&&S.session.session_id===session.session_id) S.session.archived=session.archived;
+        await renderSessionList();
+        showToast(session.archived?'Session archived':'Session restored');
+      }catch(err){showToast('Archive failed: '+err.message);}
+    }
+  ));
+  menu.appendChild(_buildSessionAction(
+    'Duplicate conversation',
+    'Create a copy with the same workspace and model',
+    ICONS.dup,
+    async()=>{
+      closeSessionActionMenu();
+      try{
+        const res=await api('/api/session/new',{method:'POST',body:JSON.stringify({workspace:session.workspace,model:session.model})});
+        if(res.session){
+          await api('/api/session/rename',{method:'POST',body:JSON.stringify({session_id:res.session.session_id,title:(session.title||'Untitled')+' (copy)'})});
+          await loadSession(res.session.session_id);
+          await renderSessionList();
+          showToast('Session duplicated');
+        }
+      }catch(err){showToast('Duplicate failed: '+err.message);}
+    }
+  ));
+  menu.appendChild(_buildSessionAction(
+    'Delete conversation',
+    'Permanently remove this conversation',
+    ICONS.trash,
+    async()=>{
+      closeSessionActionMenu();
+      await deleteSession(session.session_id);
+    },
+    'danger'
+  ));
+  document.body.appendChild(menu);
+  _sessionActionMenu = menu;
+  _sessionActionAnchor = anchorEl;
+  _sessionActionSessionId = session.session_id;
+  anchorEl.classList.add('active');
+  const row=anchorEl.closest('.session-item');
+  if(row) row.classList.add('menu-open');
+  _positionSessionActionMenu(anchorEl);
+}
+
+document.addEventListener('click',e=>{
+  if(!_sessionActionMenu) return;
+  if(_sessionActionMenu.contains(e.target)) return;
+  if(_sessionActionAnchor && _sessionActionAnchor.contains(e.target)) return;
+  closeSessionActionMenu();
+});
+document.addEventListener('scroll',e=>{
+  if(!_sessionActionMenu) return;
+  if(_sessionActionMenu.contains(e.target)) return;
+  closeSessionActionMenu();
+}, true);
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape' && _sessionActionMenu) closeSessionActionMenu();
+});
+window.addEventListener('resize',()=>{
+  if(_sessionActionMenu && _sessionActionAnchor) _positionSessionActionMenu(_sessionActionAnchor);
+});
 
 async function renderSessionList(){
   try{
@@ -99,6 +331,35 @@ async function renderSessionList(){
     _allProjects = projData.projects||[];
     renderSessionListFromCache();  // no-ops if rename is in progress
   }catch(e){console.warn('renderSessionList',e);}
+}
+
+// ── Gateway session SSE (real-time sync for agent sessions) ──
+let _gatewaySSE = null;
+
+function startGatewaySSE(){
+  stopGatewaySSE();
+  if(!window._showCliSessions) return;
+  try{
+    _gatewaySSE = new EventSource('/api/sessions/gateway/stream');
+    _gatewaySSE.addEventListener('sessions_changed', (ev) => {
+      try{
+        const data = JSON.parse(ev.data);
+        if(data.sessions){
+          renderSessionList(); // re-fetch and re-render
+        }
+      }catch(e){ /* ignore parse errors */ }
+    });
+    _gatewaySSE.onerror = () => {
+      // EventSource auto-reconnects; no action needed
+    };
+  }catch(e){ /* SSE not available */ }
+}
+
+function stopGatewaySSE(){
+  if(_gatewaySSE){
+    _gatewaySSE.close();
+    _gatewaySSE = null;
+  }
 }
 
 let _searchDebounceTimer = null;
@@ -121,9 +382,76 @@ function filterSessions(){
   }, 350);
 }
 
+function _sessionTimestampMs(session) {
+  const raw = Number(session && (session.updated_at || session.created_at || 0));
+  return Number.isFinite(raw) ? raw * 1000 : 0;
+}
+
+function _localDayOrdinal(timestampMs) {
+  const date = new Date(timestampMs);
+  return Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000);
+}
+
+function _sessionCalendarBoundaries(nowMs = Date.now()) {
+  const now = new Date(nowMs);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const startOfWeek = new Date(startOfToday);
+  startOfWeek.setDate(startOfWeek.getDate() - ((startOfWeek.getDay() + 6) % 7));
+  const startOfLastWeek = new Date(startOfWeek);
+  startOfLastWeek.setDate(startOfLastWeek.getDate() - 7);
+  return {
+    startOfToday: startOfToday.getTime(),
+    startOfYesterday: startOfYesterday.getTime(),
+    startOfWeek: startOfWeek.getTime(),
+    startOfLastWeek: startOfLastWeek.getTime(),
+  };
+}
+
+function _formatSessionDate(timestampMs, nowMs = Date.now()) {
+  const date = new Date(timestampMs);
+  const now = new Date(nowMs);
+  const options = {month:'short', day:'numeric'};
+  if (date.getFullYear() !== now.getFullYear()) options.year = 'numeric';
+  return date.toLocaleDateString(undefined, options);
+}
+
+function _formatRelativeSessionTime(timestampMs, nowMs = Date.now()) {
+  if (!timestampMs) return t('session_time_unknown');
+  const diffMs = Math.max(0, nowMs - timestampMs);
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const {startOfToday, startOfYesterday, startOfWeek, startOfLastWeek} = _sessionCalendarBoundaries(nowMs);
+  const dayDiff = Math.max(0, _localDayOrdinal(nowMs) - _localDayOrdinal(timestampMs));
+  if (timestampMs >= startOfToday) {
+    if (diffMs < minute) return t('session_time_just_now');
+    if (diffMs < hour) {
+      const minutes = Math.floor(diffMs / minute);
+      return t('session_time_minutes_ago', minutes);
+    }
+    const hours = Math.floor(diffMs / hour);
+    return t('session_time_hours_ago', hours);
+  }
+  if (timestampMs >= startOfYesterday) return t('session_time_bucket_yesterday');
+  if (timestampMs >= startOfWeek) return t('session_time_days_ago', dayDiff);
+  if (timestampMs >= startOfLastWeek) return t('session_time_last_week');
+  return _formatSessionDate(timestampMs, nowMs);
+}
+
+function _sessionTimeBucketLabel(timestampMs, nowMs = Date.now()) {
+  if (!timestampMs) return t('session_time_bucket_older');
+  const {startOfToday, startOfYesterday, startOfWeek, startOfLastWeek} = _sessionCalendarBoundaries(nowMs);
+  if (timestampMs >= startOfToday) return t('session_time_bucket_today');
+  if (timestampMs >= startOfYesterday) return t('session_time_bucket_yesterday');
+  if (timestampMs >= startOfWeek) return t('session_time_bucket_this_week');
+  if (timestampMs >= startOfLastWeek) return t('session_time_bucket_last_week');
+  return t('session_time_bucket_older');
+}
+
 function renderSessionListFromCache(){
   // Don't re-render while user is actively renaming a session (would destroy the input)
   if(_renamingSid) return;
+  closeSessionActionMenu();
   const q=($('sessionSearch').value||'').toLowerCase();
   const titleMatches=q?_allSessions.filter(s=>(s.title||'Untitled').toLowerCase().includes(q)):_allSessions;
   // Merge content matches (deduped): content matches appended after title matches
@@ -206,43 +534,100 @@ function renderSessionListFromCache(){
     empty.textContent='No sessions in this project yet.';
     list.appendChild(empty);
   }
+  const orderedSessions=[...sessions].sort((a,b)=>_sessionTimestampMs(b)-_sessionTimestampMs(a));
   // Separate pinned from unpinned
-  const pinned=sessions.filter(s=>s.pinned);
-  const unpinned=sessions.filter(s=>!s.pinned);
-  // Date grouping: Pinned / Today / Yesterday / Earlier
+  const pinned=orderedSessions.filter(s=>s.pinned);
+  const unpinned=orderedSessions.filter(s=>!s.pinned);
+  // Date grouping: Pinned / Today / Yesterday / This week / Last week / Older
   const now=Date.now();
-  const ONE_DAY=86400000;
-  let lastGroup='';
-  const ordered=[...pinned,...unpinned].slice(0,50);
-  if(pinned.length){
-    const hdr=document.createElement('div');
-    hdr.style.cssText='font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#f5c542;padding:10px 10px 4px;opacity:.9;';
-    hdr.textContent='\u2605 Pinned';
-    list.appendChild(hdr);
+  // Collapse state persisted in localStorage
+  let _groupCollapsed={};
+  try{_groupCollapsed=JSON.parse(localStorage.getItem('hermes-date-groups-collapsed')||'{}');}catch(e){}
+  const _saveCollapsed=()=>{try{localStorage.setItem('hermes-date-groups-collapsed',JSON.stringify(_groupCollapsed));}catch(e){}};
+  // Group sessions by date
+  const groups=[];
+  let curLabel=null,curItems=[];
+  if(pinned.length) groups.push({label:'\u2605 Pinned',items:pinned,isPinned:true});
+  for(const s of unpinned){
+    const ts=_sessionTimestampMs(s);
+    const label=_sessionTimeBucketLabel(ts, now);
+    if(label!==curLabel){
+      if(curItems.length) groups.push({label:curLabel,items:curItems});
+      curLabel=label;curItems=[s];
+    } else { curItems.push(s); }
   }
-  for(const s of ordered){
-    if(!s.pinned){
-      const ts=(s.updated_at||s.created_at||0)*1000;  // group by last activity, not creation
-      const group=ts>now-ONE_DAY?'Today':ts>now-2*ONE_DAY?'Yesterday':'Earlier';
-      if(group!==lastGroup){
-        lastGroup=group;
-        const hdr=document.createElement('div');
-        hdr.style.cssText='font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:10px 10px 4px;opacity:.8;';
-        hdr.textContent=group;
-        list.appendChild(hdr);
-      }
-    }
+  if(curItems.length) groups.push({label:curLabel,items:curItems});
+  // Render groups with collapsible headers
+  for(const g of groups){
+    const wrapper=document.createElement('div');
+    wrapper.className='session-date-group';
+    const hdr=document.createElement('div');
+    hdr.className='session-date-header'+(g.isPinned?' pinned':'');
+    const caret=document.createElement('span');
+    caret.className='session-date-caret';
+    caret.textContent='\u25B8'; // right-pointing triangle
+    const label=document.createElement('span');
+    label.textContent=g.label;
+    hdr.appendChild(caret);hdr.appendChild(label);
+    const body=document.createElement('div');
+    body.className='session-date-body';
+    if(_groupCollapsed[g.label]){body.style.display='none';caret.classList.add('collapsed');}
+    hdr.onclick=()=>{
+      const isCollapsed=body.style.display==='none';
+      body.style.display=isCollapsed?'':'none';
+      caret.classList.toggle('collapsed',!isCollapsed);
+      _groupCollapsed[g.label]=!isCollapsed;
+      _saveCollapsed();
+    };
+    wrapper.appendChild(hdr);
+    for(const s of g.items){ body.appendChild(_renderOneSession(s)); }
+    wrapper.appendChild(body);
+    list.appendChild(wrapper);
+  }
+  // ── Render session items (extracted for group body use) ──
+  // Note: declared after the groups loop but available via function hoisting.
+  function _formatSourceTag(tag){
+    // #429: return null for unknown/unrecognised tags so callers can suppress display.
+    // Previously returned the raw tag string, causing 'N/A' or other junk values
+    // from older hermes-agent state.db records to surface in the session list.
+    const names={telegram:'via Telegram',discord:'via Discord',slack:'via Slack',cli:'CLI',feishu:'via Feishu',weixin:'via WeChat'};
+    return names[tag]||null;
+  }
+  function _renderOneSession(s){
     const el=document.createElement('div');
     const isActive=S.session&&s.session_id===S.session.session_id;
     el.className='session-item'+(isActive?' active':'')+(isActive&&S.session&&S.session._flash?' new-flash':'')+(s.archived?' archived':'')+(s.is_cli_session?' cli-session':'');
+    if(s.source_tag) el.dataset.source=s.source_tag;
     if(isActive&&S.session&&S.session._flash)delete S.session._flash;
     const rawTitle=s.title||'Untitled';
     const tags=(rawTitle.match(/#[\w-]+/g)||[]);
-    const cleanTitle=tags.length?rawTitle.replace(/#[\w-]+/g,'').trim():rawTitle;
+    let cleanTitle=tags.length?rawTitle.replace(/#[\w-]+/g,'').trim():rawTitle;
+    // Guard: system prompt content must never surface as a visible session title
+    const _SOURCE_DISPLAY={telegram:'Telegram',discord:'Discord',slack:'Slack',cli:'CLI',feishu:'Feishu',weixin:'WeChat'};
+    if(cleanTitle.startsWith('[SYSTEM:')){
+      cleanTitle=(_SOURCE_DISPLAY[s.source_tag]||'Gateway')+' session';
+    }
+    const sessionText=document.createElement('div');
+    sessionText.className='session-text';
+    const titleRow=document.createElement('div');
+    titleRow.className='session-title-row';
     const title=document.createElement('span');
     title.className='session-title';
     title.textContent=cleanTitle||'Untitled';
     title.title='Double-click to rename';
+    const tsMs=_sessionTimestampMs(s);
+    titleRow.appendChild(title);
+    const metaBits=[];
+    if(s.is_cli_session && s.source_tag){const _stLabel=_formatSourceTag(s.source_tag);if(_stLabel)metaBits.push(_stLabel);}
+    if(s.message_count) metaBits.push(t('n_messages', s.message_count));
+    if(s.model) metaBits.push(String(s.model).split('/').pop());
+    sessionText.appendChild(titleRow);
+    if(metaBits.length){
+      const meta=document.createElement('div');
+      meta.className='session-meta';
+      meta.textContent=metaBits.join(' · ');
+      sessionText.appendChild(meta);
+    }
     // Append tag chips after the title text
     for(const tag of tags){
       const chip=document.createElement('span');
@@ -259,6 +644,7 @@ function renderSessionListFromCache(){
 
     // Rename: called directly when we confirm it's a double-click
     const startRename=()=>{
+      closeSessionActionMenu();
       _renamingSid = s.session_id;
       const inp=document.createElement('input');
       inp.className='session-title-input';
@@ -297,11 +683,10 @@ function renderSessionListFromCache(){
       pinInd.innerHTML=ICONS.pin;
       el.appendChild(pinInd);
     }
-    // Project indicator: colored left border (active item keeps its own gold color)
+    // Project indicator: colored dot appended after the title
     if(s.project_id){
       const proj=_allProjects.find(p=>p.project_id===s.project_id);
       if(proj){
-        if(!isActive) el.style.borderLeftColor=proj.color||'var(--blue)';
         const dot=document.createElement('span');
         dot.className='session-project-dot';
         dot.style.background=proj.color||'var(--blue)';
@@ -309,66 +694,23 @@ function renderSessionListFromCache(){
         title.appendChild(dot);
       }
     }
-    el.appendChild(title);
-    // Action buttons overlay (appears on hover with gradient fade)
+    el.appendChild(sessionText);
+    // Single trigger button that opens a shared dropdown menu
     const actions=document.createElement('div');
     actions.className='session-actions';
-    // Pin toggle
-    const pinBtn=document.createElement('button');
-    pinBtn.className='act-pin'+(s.pinned?' pinned':'');
-    pinBtn.innerHTML=s.pinned?ICONS.pin:ICONS.unpin;
-    pinBtn.title=s.pinned?'Unpin':'Pin to top';
-    pinBtn.onclick=async(e)=>{
-      e.stopPropagation();e.preventDefault();
-      const newPinned=!s.pinned;
-      try{
-        await api('/api/session/pin',{method:'POST',body:JSON.stringify({session_id:s.session_id,pinned:newPinned})});
-        s.pinned=newPinned;
-        if(S.session&&S.session.session_id===s.session_id) S.session.pinned=newPinned;
-        renderSessionList();
-      }catch(err){showToast('Pin failed: '+err.message);}
+    const menuBtn=document.createElement('button');
+    menuBtn.type='button';
+    menuBtn.className='session-actions-trigger';
+    menuBtn.title='Conversation actions';
+    menuBtn.setAttribute('aria-haspopup','menu');
+    menuBtn.setAttribute('aria-label','Conversation actions');
+    menuBtn.innerHTML=ICONS.more;
+    menuBtn.onclick=(e)=>{
+      e.stopPropagation();
+      e.preventDefault();
+      _openSessionActionMenu(s, menuBtn);
     };
-    actions.appendChild(pinBtn);
-    // Move to project
-    const move=document.createElement('button');
-    move.className='act-move';move.innerHTML=ICONS.folder;move.title='Move to project';
-    move.onclick=async(e)=>{e.stopPropagation();e.preventDefault();_showProjectPicker(s,move);};
-    actions.appendChild(move);
-    // Archive
-    const archive=document.createElement('button');
-    archive.className='act-archive';archive.innerHTML=s.archived?ICONS.unarchive:ICONS.archive;
-    archive.title=s.archived?'Unarchive':'Archive';
-    archive.onclick=async(e)=>{
-      e.stopPropagation();e.preventDefault();
-      try{
-        await api('/api/session/archive',{method:'POST',body:JSON.stringify({session_id:s.session_id,archived:!s.archived})});
-        s.archived=!s.archived;
-        if(S.session&&S.session.session_id===s.session_id) S.session.archived=s.archived;
-        await renderSessionList();
-        showToast(s.archived?'Session archived':'Session restored');
-      }catch(err){showToast('Archive failed: '+err.message);}
-    };
-    actions.appendChild(archive);
-    // Duplicate
-    const dup=document.createElement('button');
-    dup.className='act-dup';dup.innerHTML=ICONS.dup;dup.title='Duplicate';
-    dup.onclick=async(e)=>{
-      e.stopPropagation();e.preventDefault();
-      try{
-        const res=await api('/api/session/new',{method:'POST',body:JSON.stringify({workspace:s.workspace,model:s.model})});
-        if(res.session){
-          await api('/api/session/rename',{method:'POST',body:JSON.stringify({session_id:res.session.session_id,title:(s.title||'Untitled')+' (copy)'})});
-          await loadSession(res.session.session_id);await renderSessionList();
-          showToast('Session duplicated');
-        }
-      }catch(err){showToast('Duplicate failed: '+err.message);}
-    };
-    actions.appendChild(dup);
-    // Trash
-    const trash=document.createElement('button');
-    trash.className='act-trash';trash.innerHTML=ICONS.trash;trash.title='Delete';
-    trash.onclick=async(e)=>{e.stopPropagation();e.preventDefault();await deleteSession(s.session_id);};
-    actions.appendChild(trash);
+    actions.appendChild(menuBtn);
     el.appendChild(actions);
 
     // Use a click timer to distinguish single-click (navigate) from double-click (rename).
@@ -399,12 +741,17 @@ function renderSessionListFromCache(){
       _clickTimer=null;
       startRename();
     };
-    list.appendChild(el);
+    return el;
   }
 }
 
 async function deleteSession(sid){
-  if(!confirm('Delete this conversation?'))return;
+  const ok=await showConfirmDialog({
+    message:'Delete this conversation?',
+    confirmLabel:t('delete_title'),
+    danger:true
+  });
+  if(!ok)return;
   try{
     await api('/api/session/delete',{method:'POST',body:JSON.stringify({session_id:sid})});
   }catch(e){setStatus(`Delete failed: ${e.message}`);return;}
@@ -416,7 +763,7 @@ async function deleteSession(sid){
     if(remaining.sessions&&remaining.sessions.length){
       await loadSession(remaining.sessions[0].session_id);
     }else{
-      $('topbarTitle').textContent='Hermes';
+      $('topbarTitle').textContent=window._botName||'Hermes';
       $('topbarMeta').textContent='Start a new conversation';
       $('msgInner').innerHTML='';
       $('emptyState').style.display='';
@@ -479,8 +826,11 @@ function _showProjectPicker(session, anchorEl){
   createItem.onclick=async()=>{
     picker.remove();
     document.removeEventListener('click',close);
-    // Prompt for name inline
-    const name=prompt('Project name:');
+    const name=await showPromptDialog({
+      message:t('project_name_prompt'),
+      confirmLabel:t('create'),
+      placeholder:'Project name'
+    });
     if(!name||!name.trim()) return;
     const color=PROJECT_COLORS[_allProjects.length%PROJECT_COLORS.length];
     const res=await api('/api/projects/create',{method:'POST',body:JSON.stringify({name:name.trim(),color})});
@@ -566,11 +916,14 @@ function _startProjectRename(proj, chip){
 }
 
 async function _confirmDeleteProject(proj){
-  if(!confirm('Delete project "'+proj.name+'"? Sessions will be unassigned but not deleted.')){return;}
+  const ok=await showConfirmDialog({
+    message:'Delete project "'+proj.name+'"? Sessions will be unassigned but not deleted.',
+    confirmLabel:t('delete_title'),
+    danger:true
+  });
+  if(!ok){return;}
   await api('/api/projects/delete',{method:'POST',body:JSON.stringify({project_id:proj.project_id})});
   if(_activeProject===proj.project_id) _activeProject=null;
   await renderSessionList();
   showToast('Project deleted');
 }
-
-

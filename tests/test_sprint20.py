@@ -8,8 +8,9 @@ the browser with no server-side component.
 import re
 import urllib.request
 import json
+import pathlib
 
-BASE = "http://127.0.0.1:8788"
+from tests._pytest_port import BASE
 
 
 def get_text(path):
@@ -213,9 +214,14 @@ def test_boot_js_recognition_interim_results():
 
 
 def test_boot_js_recognition_lang_en():
-    """recognition.lang must be set to en-US."""
+    """recognition.lang must be set (static en-US or dynamic via _locale._speech)."""
     js, _ = get_text("/static/boot.js")
-    assert "recognition.lang='en-US'" in js or 'recognition.lang = "en-US"' in js or "recognition.lang='en-US'" in js
+    # Accept either the old static value or the new locale-driven assignment
+    assert (
+        "recognition.lang='en-US'" in js
+        or 'recognition.lang = "en-US"' in js
+        or "recognition.lang=" in js  # dynamic: recognition.lang=(_locale._speech)||'en-US'
+    )
 
 
 def test_boot_js_onresult_handler():
@@ -310,15 +316,31 @@ def test_boot_js_iife_guard():
     assert '(function(){' in js or '(function () {' in js
 
 
-def test_boot_js_browser_unsupported_return():
-    """boot.js must bail out (return) early when SpeechRecognition is unavailable."""
+def test_boot_js_browser_unsupported_guard_uses_fallback_capabilities():
+    """boot.js must keep the mic available when either speech recognition OR recorder capture exists."""
     js, _ = get_text("/static/boot.js")
-    # The IIFE should have an early return when SpeechRecognition is falsy
-    assert 'if(!SpeechRecognition)' in js or 'if (!SpeechRecognition)' in js
+    assert 'navigator.mediaDevices' in js
+    assert 'getUserMedia' in js
+    assert 'MediaRecorder' in js
+    assert '_canRecordAudio' in js or 'canRecordAudio' in js, \
+        "boot.js should compute a recorder fallback instead of bailing only on SpeechRecognition"
 
 
-def test_boot_js_shows_mic_button_when_supported():
-    """boot.js must set display='' on btnMic when SpeechRecognition is available."""
+def test_boot_js_media_recorder_fallback_posts_to_transcribe_api():
+    """Desktop fallback must send recorded audio to /api/transcribe for transcription."""
+    js, _ = get_text("/static/boot.js")
+    assert '/api/transcribe' in js
+    assert 'fetch(' in js
+
+
+def test_routes_define_transcribe_endpoint():
+    """Server routes must expose /api/transcribe for MediaRecorder fallback uploads."""
+    routes = pathlib.Path(__file__).parent.parent.joinpath("api/routes.py").read_text(encoding="utf-8")
+    assert '"/api/transcribe"' in routes
+
+
+def test_boot_js_shows_mic_button_when_any_voice_path_is_supported():
+    """boot.js must reveal btnMic when speech recognition or recorder fallback is available."""
     js, _ = get_text("/static/boot.js")
     assert "btn.style.display=''" in js or 'btn.style.display = ""' in js
 

@@ -3,22 +3,51 @@ Hermes Web UI -- Main server entry point.
 Thin routing shell: imports Handler, delegates to api/routes.py, runs server.
 All business logic lives in api/*.
 """
+import logging
+import socket
+import sys
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
+logger = logging.getLogger(__name__)
+
 from api.auth import check_auth
 from api.config import HOST, PORT, STATE_DIR, SESSION_DIR, DEFAULT_WORKSPACE
 from api.helpers import j
 from api.routes import handle_get, handle_post
+from api.startup import auto_install_agent_deps, fix_credential_permissions
+
+
+class QuietHTTPServer(ThreadingHTTPServer):
+    """Custom HTTP server that silently handles common network errors."""
+    
+    def handle_error(self, request, client_address):
+        """Override to suppress logging for common client disconnect errors."""
+        exc_type, exc_value, _ = sys.exc_info()
+        
+        # Silently ignore common connection errors caused by client disconnects
+        if exc_type in (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+            return
+        
+        # Also handle socket errors that indicate client disconnect
+        if exc_type is socket.error:
+            # errno 54 is Connection reset by peer on macOS/BSD
+            # errno 104 is Connection reset by peer on Linux
+            if exc_value.errno in (54, 104, 32):  # ECONNRESET, EPIPE
+                return
+        
+        # For other errors, use default logging
+        super().handle_error(request, client_address)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'HermesWebUI/0.2'
+    timeout = 30  # seconds — kills idle/incomplete connections to prevent thread exhaustion
+    server_version = 'HermesWebUI/0.50.38'
     def log_message(self, fmt, *args): pass  # suppress default Apache-style log
 
-    def log_request(self, code='-', size='-'):
+    def log_request(self, code: str='-', size: str='-') -> None:
         """Structured JSON logs for each request."""
         import json as _json
         duration_ms = round((time.time() - getattr(self, '_req_t0', time.time())) * 1000, 1)
@@ -31,7 +60,7 @@ class Handler(BaseHTTPRequestHandler):
         })
         print(f'[webui] {record}', flush=True)
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         self._req_t0 = time.time()
         try:
             parsed = urlparse(self.path)
@@ -39,16 +68,11 @@ class Handler(BaseHTTPRequestHandler):
             result = handle_get(self, parsed)
             if result is False:
                 return j(self, {'error': 'not found'}, status=404)
-        except (BrokenPipeError, ConnectionResetError):
-            return  # client disconnected — silently ignore
         except Exception as e:
             print(f'[webui] ERROR {self.command} {self.path}\n' + traceback.format_exc(), flush=True)
-            try:
-                return j(self, {'error': 'Internal server error'}, status=500)
-            except (BrokenPipeError, ConnectionResetError):
-                return  # client already gone
+            return j(self, {'error': 'Internal server error'}, status=500)
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         self._req_t0 = time.time()
         try:
             parsed = urlparse(self.path)
@@ -56,80 +80,102 @@ class Handler(BaseHTTPRequestHandler):
             result = handle_post(self, parsed)
             if result is False:
                 return j(self, {'error': 'not found'}, status=404)
-        except (BrokenPipeError, ConnectionResetError):
-            return  # client disconnected — silently ignore
         except Exception as e:
             print(f'[webui] ERROR {self.command} {self.path}\n' + traceback.format_exc(), flush=True)
-            try:
-                return j(self, {'error': 'Internal server error'}, status=500)
-            except (BrokenPipeError, ConnectionResetError):
-                return  # client already gone
+            return j(self, {'error': 'Internal server error'}, status=500)
 
 
-def main():
+def main() -> None:
     from api.config import print_startup_config, verify_hermes_imports, _HERMES_FOUND
 
     print_startup_config()
 
-    ok, missing = verify_hermes_imports()
+    # Fix sensitive file permissions before doing anything else
+    fix_credential_permissions()
+
+    within_container = False
+    # Check for the "/.within_container" file to determine if we're running inside a container; this file is created in the Dockerfile
+    try:
+        with open('/.within_container', 'r') as f:
+            within_container = True
+    except FileNotFoundError:
+        pass
+
+    if within_container:
+        print('[ok] Running within container.', flush=True)
+
+    # Security: warn if binding non-loopback without authentication
+    from api.auth import is_auth_enabled
+    if HOST not in ('127.0.0.1', '::1', 'localhost') and not is_auth_enabled():
+        print(f'[!!] WARNING: Binding to {HOST} with NO PASSWORD SET.', flush=True)
+        print(f'     Anyone on the network can access your filesystem and agent.', flush=True)
+        print(f'     Set a password via Settings or HERMES_WEBUI_PASSWORD env var.', flush=True)
+        print(f'     To suppress: bind to 127.0.0.1 or set a password.', flush=True)
+        if within_container:
+            print(f'     Note: You are running within a container, must bind to 0.0.0.0 to publish the port.', flush=True)
+    elif not is_auth_enabled():
+        print(f'  [tip] No password set. Any process on this machine can read sessions', flush=True)
+        print(f'        and memory via the local API. Set HERMES_WEBUI_PASSWORD to', flush=True)
+        print(f'        enable authentication.', flush=True)
+
+    ok, missing, errors = verify_hermes_imports()
     if not ok and _HERMES_FOUND:
         print(f'[!!] Warning: Hermes agent found but missing modules: {missing}', flush=True)
-        print('     Agent features may not work correctly.', flush=True)
+        for mod, err in errors.items():
+            print(f'     {mod}: {err}', flush=True)
+        print('     Attempting to install missing dependencies from agent requirements.txt...', flush=True)
+        auto_install_agent_deps()
+        ok, missing, errors = verify_hermes_imports()
+        if not ok:
+            print(f'[!!] Still missing after install attempt: {missing}', flush=True)
+            for mod, err in errors.items():
+                print(f'     {mod}: {err}', flush=True)
+            print('     Agent features may not work correctly.', flush=True)
+        else:
+            print('[ok] Agent dependencies installed successfully.', flush=True)
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     DEFAULT_WORKSPACE.mkdir(parents=True, exist_ok=True)
 
-    # Start background task worker
+    # Start the gateway session watcher for real-time SSE updates
     try:
-        from api.task_integration import init_task_system
-        init_task_system()
+        from api.gateway_watcher import start_watcher
+        start_watcher()
     except Exception as e:
-        print(f'  [tasks] Warning: background task system failed to start: {e}', flush=True)
+        print(f'[!!] WARNING: Gateway watcher failed to start: {e}', flush=True)
 
-    # Start stream reaper (cleans up zombie SSE streams every 60s)
-    from api.config import STREAMS, STREAMS_LOCK, CANCEL_FLAGS
-    import threading as _thr
-    def _stream_reaper():
-        import time as _t
-        while True:
-            _t.sleep(60)
-            now = _t.time()
-            stale = []
-            with STREAMS_LOCK:
-                for sid, q in list(STREAMS.items()):
-                    # Stream is stale if queue is empty and was created >5 min ago
-                    created = getattr(q, '_created', 0)
-                    if not created:
-                        q._created = now
-                        continue
-                    if now - created > 300 and q.empty():
-                        stale.append(sid)
-                for sid in stale:
-                    STREAMS.pop(sid, None)
-                    CANCEL_FLAGS.pop(sid, None)
-            if stale:
-                print(f'[webui] stream reaper: cleaned {len(stale)} zombie stream(s)', flush=True)
-    _reaper = _thr.Thread(target=_stream_reaper, daemon=True, name='stream-reaper')
-    _reaper.start()
+    httpd = QuietHTTPServer((HOST, PORT), Handler)
 
-    # Start task sweeper (cleans up stuck queued/running tasks)
-    try:
-        from api.task_sweeper import start_task_sweeper
-        from api.task_store import get_task_store
-        start_task_sweeper(get_task_store(), STREAMS, STREAMS_LOCK)
-        print('  [tasks] Task sweeper started', flush=True)
-    except Exception as e:
-        print(f'  [tasks] Task sweeper failed: {e}', flush=True)
+    # ── TLS/HTTPS setup (optional) ─────────────────────────────────────────
+    from api.config import TLS_ENABLED, TLS_CERT, TLS_KEY
+    scheme = 'https' if TLS_ENABLED else 'http'
+    if TLS_ENABLED:
+        try:
+            import ssl
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            ctx.load_cert_chain(TLS_CERT, TLS_KEY)
+            httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+            print(f'  TLS enabled: cert={TLS_CERT}, key={TLS_KEY}', flush=True)
+        except Exception as e:
+            print(f'[!!] WARNING: TLS setup failed ({e}), falling back to HTTP', flush=True)
+            scheme = 'http'
 
-
-    httpd = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f'  Hermes Web UI listening on http://{HOST}:{PORT}', flush=True)
-    if HOST == '127.0.0.1':
+    print(f'  Hermes Web UI listening on {scheme}://{HOST}:{PORT}', flush=True)
+    if HOST == '127.0.0.1' or within_container:
         print(f'  Remote access: ssh -N -L {PORT}:127.0.0.1:{PORT} <user>@<your-server>', flush=True)
-    print(f'  Then open:     http://localhost:{PORT}', flush=True)
+    print(f'  Then open:     {scheme}://localhost:{PORT}', flush=True)
     print('', flush=True)
-    httpd.serve_forever()
+    try:
+        httpd.serve_forever()
+    finally:
+        # Stop the gateway watcher on shutdown
+        try:
+            from api.gateway_watcher import stop_watcher
+            stop_watcher()
+        except Exception:
+            logger.debug("Failed to stop gateway watcher during shutdown")
 
 if __name__ == '__main__':
     main()

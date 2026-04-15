@@ -1,13 +1,13 @@
 """
 Sprint 16 Tests: safe HTML rendering in renderMd(), active session styling,
-session sidebar polish (SVG icons, overlay actions).
+session sidebar polish (SVG icons, dropdown actions).
 """
 import html as _html
 import pathlib
 import re
 import urllib.request
 
-BASE = "http://127.0.0.1:8788"
+from tests._pytest_port import BASE
 REPO_ROOT = pathlib.Path(__file__).parent.parent
 
 
@@ -676,20 +676,22 @@ def test_sessions_js_has_svg_icons(cleanup_test_sessions):
     assert "<svg" in code, "SVG content not found in ICONS"
 
 
-def test_sessions_js_has_overlay_actions(cleanup_test_sessions):
-    """sessions.js must use .session-actions overlay div for action buttons."""
+def test_sessions_js_has_dropdown_actions(cleanup_test_sessions):
+    """sessions.js must use a single trigger button and dropdown for session actions."""
     src = REPO_ROOT / "static" / "sessions.js"
     code = src.read_text()
-    assert "session-actions" in code, ".session-actions overlay not found in sessions.js"
+    assert "session-actions-trigger" in code, "session action trigger button not found in sessions.js"
+    assert "session-action-menu" in code, "session action dropdown menu not found in sessions.js"
 
 
-def test_style_css_has_session_actions_overlay(cleanup_test_sessions):
-    """style.css must define .session-actions with position:absolute."""
+def test_style_css_has_session_actions_dropdown(cleanup_test_sessions):
+    """style.css must define trigger and dropdown styles for session actions."""
     src = REPO_ROOT / "static" / "style.css"
     code = src.read_text()
     assert ".session-actions" in code, ".session-actions not found in style.css"
-    assert "position:absolute" in code or "position: absolute" in code, \
-        ".session-actions must use position:absolute for overlay"
+    assert ".session-action-menu" in code, ".session-action-menu not found in style.css"
+    assert "position:fixed" in code or "position: fixed" in code, \
+        ".session-action-menu must use position:fixed to avoid sidebar clipping"
 
 
 def test_style_css_active_session_uses_gold(cleanup_test_sessions):
@@ -700,10 +702,20 @@ def test_style_css_active_session_uses_gold(cleanup_test_sessions):
         "Active session gold color (#e8a030) not found in style.css"
 
 
-def test_sessions_js_active_skips_project_border(cleanup_test_sessions):
-    """sessions.js must not override active session border-left with project color."""
+def test_sessions_js_uses_action_menu_not_per_row_buttons(cleanup_test_sessions):
+    """sessions.js must use the single ⋯ action menu instead of per-row buttons.
+
+    The per-row button overlay was replaced with a single ⋯ trigger that opens a
+    positioned dropdown (session-action-menu). This removes the borderLeftColor
+    project colour override that the old code applied, which was the original
+    concern this test guarded. The new design uses a dot indicator for project
+    membership instead.
+    """
     src = REPO_ROOT / "static" / "sessions.js"
     code = src.read_text()
-    # The fix: only set borderLeftColor if NOT the active session
-    assert "isActive" in code, "isActive check not found in sessions.js"
-    assert "borderLeftColor" in code, "borderLeftColor not found in sessions.js"
+    assert "session-actions-trigger" in code, "session-actions-trigger not found in sessions.js"
+    assert "_openSessionActionMenu" in code, "_openSessionActionMenu not found in sessions.js"
+    assert "closeSessionActionMenu" in code, "closeSessionActionMenu not found in sessions.js"
+    # The old per-row buttons must not be present (they were replaced by the menu)
+    assert "act-pin" not in code, "old act-pin per-row button still in sessions.js"
+    assert "act-archive" not in code, "old act-archive per-row button still in sessions.js"

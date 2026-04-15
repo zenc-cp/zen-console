@@ -4,14 +4,13 @@ let _skillsData = null; // cached skills list
 async function switchPanel(name) {
   _currentPanel = name;
   // Update nav tabs
-  document.querySelectorAll('.nav-tab').forEach(t=>t.classList.toggle('active',t.dataset.panel===name));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.panel === name));
   // Update panel views
-  document.querySelectorAll('.panel-view').forEach(p=>p.classList.remove('active'));
-  const panelEl=$('panel'+name.charAt(0).toUpperCase()+name.slice(1));
-  if(panelEl)panelEl.classList.add('active');
+  document.querySelectorAll('.panel-view').forEach(p => p.classList.remove('active'));
+  const panelEl = $('panel' + name.charAt(0).toUpperCase() + name.slice(1));
+  if (panelEl) panelEl.classList.add('active');
   // Lazy-load panel data
-  if(name==='tasks')loadTasksPanel();
-  if(name==='wasessions')loadWASessionsPanel();
+  if (name === 'tasks') await loadCrons();
   if (name === 'skills') await loadSkills();
   if (name === 'memory') await loadMemory();
   if (name === 'workspaces') await loadWorkspacesPanel();
@@ -25,7 +24,7 @@ async function loadCrons() {
   try {
     const data = await api('/api/crons');
     if (!data.jobs || !data.jobs.length) {
-      box.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">No scheduled jobs found.</div>';
+      box.innerHTML = `<div style="padding:16px;color:var(--muted);font-size:12px">${esc(t('cron_no_jobs'))}</div>`;
       return;
     }
     box.innerHTML = '';
@@ -34,42 +33,42 @@ async function loadCrons() {
       item.className = 'cron-item';
       item.id = 'cron-' + job.id;
       const statusClass = job.enabled === false ? 'disabled' : job.state === 'paused' ? 'paused' : job.last_status === 'error' ? 'error' : 'active';
-      const statusLabel = job.enabled === false ? 'off' : job.state === 'paused' ? 'paused' : job.last_status === 'error' ? 'error' : 'active';
-      const nextRun = job.next_run_at ? new Date(job.next_run_at).toLocaleString() : 'N/A';
-      const lastRun = job.last_run_at ? new Date(job.last_run_at).toLocaleString() : 'never';
+      const statusLabel = job.enabled === false ? t('cron_status_off') : job.state === 'paused' ? t('cron_status_paused') : job.last_status === 'error' ? t('cron_status_error') : t('cron_status_active');
+      const nextRun = job.next_run_at ? new Date(job.next_run_at).toLocaleString() : t('not_available');
+      const lastRun = job.last_run_at ? new Date(job.last_run_at).toLocaleString() : t('never');
       item.innerHTML = `
         <div class="cron-header" onclick="toggleCron('${job.id}')">
           <span class="cron-name" title="${esc(job.name)}">${esc(job.name)}</span>
           <span class="cron-status ${statusClass}">${statusLabel}</span>
         </div>
         <div class="cron-body" id="cron-body-${job.id}">
-          <div class="cron-schedule">&#128337; ${esc(job.schedule_display || job.schedule?.expression || '')} &nbsp;|&nbsp; Next: ${esc(nextRun)} &nbsp;|&nbsp; Last: ${esc(lastRun)}</div>
+          <div class="cron-schedule">${li('clock',12)} ${esc(job.schedule_display || job.schedule?.expression || '')} &nbsp;|&nbsp; ${esc(t('cron_next'))}: ${esc(nextRun)} &nbsp;|&nbsp; ${esc(t('cron_last'))}: ${esc(lastRun)}</div>
           <div class="cron-prompt">${esc((job.prompt||'').slice(0,300))}${(job.prompt||'').length>300?'…':''}</div>
           <div class="cron-actions">
-            <button class="cron-btn run" onclick="cronRun('${job.id}')">&#9654; Run now</button>
-            ${statusLabel==='paused'
-              ? `<button class="cron-btn" onclick="cronResume('${job.id}')">&#9654;&#9474; Resume</button>`
-              : `<button class="cron-btn pause" onclick="cronPause('${job.id}')">&#9646;&#9646; Pause</button>`}
-            <button class="cron-btn" onclick="cronEditOpen('${job.id}',${JSON.stringify(job).replace(/"/g,'&quot;')})">&#9998; Edit</button>
-            <button class="cron-btn" style="border-color:rgba(201,168,76,.3);color:var(--accent)" onclick="cronDelete('${job.id}')">&#128465; Delete</button>
+            <button class="cron-btn run" onclick="cronRun('${job.id}')">${li('play',12)} ${esc(t('cron_run_now'))}</button>
+            ${job.state==='paused'
+              ? `<button class="cron-btn" onclick="cronResume('${job.id}')">${li('play',12)} ${esc(t('cron_resume'))}</button>`
+              : `<button class="cron-btn pause" onclick="cronPause('${job.id}')">${li('pause',12)} ${esc(t('cron_pause'))}</button>`}
+            <button class="cron-btn" onclick="cronEditOpen('${job.id}',${JSON.stringify(job).replace(/"/g,'&quot;')})">${li('pencil',12)} ${esc(t('edit'))}</button>
+            <button class="cron-btn" style="border-color:rgba(201,168,76,.3);color:var(--accent)" onclick="cronDelete('${job.id}')">${li('trash-2',12)} ${esc(t('delete_title'))}</button>
           </div>
           <!-- Inline edit form, hidden by default -->
           <div id="cron-edit-${job.id}" style="display:none;margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
-            <input id="cron-edit-name-${job.id}" placeholder="Job name" style="width:100%;background:rgba(255,255,255,.05);border:1px solid var(--border2);border-radius:6px;color:var(--text);padding:5px 8px;font-size:12px;outline:none;margin-bottom:5px;box-sizing:border-box">
-            <input id="cron-edit-schedule-${job.id}" placeholder="Schedule" style="width:100%;background:rgba(255,255,255,.05);border:1px solid var(--border2);border-radius:6px;color:var(--text);padding:5px 8px;font-size:12px;outline:none;margin-bottom:5px;box-sizing:border-box">
-            <textarea id="cron-edit-prompt-${job.id}" rows="3" placeholder="Prompt" style="width:100%;background:rgba(255,255,255,.05);border:1px solid var(--border2);border-radius:6px;color:var(--text);padding:5px 8px;font-size:12px;outline:none;resize:none;font-family:inherit;margin-bottom:5px;box-sizing:border-box"></textarea>
+            <input id="cron-edit-name-${job.id}" placeholder="${esc(t('cron_job_name_placeholder'))}" style="width:100%;background:rgba(255,255,255,.05);border:1px solid var(--border2);border-radius:6px;color:var(--text);padding:5px 8px;font-size:12px;outline:none;margin-bottom:5px;box-sizing:border-box">
+            <input id="cron-edit-schedule-${job.id}" placeholder="${esc(t('cron_schedule_placeholder'))}" style="width:100%;background:rgba(255,255,255,.05);border:1px solid var(--border2);border-radius:6px;color:var(--text);padding:5px 8px;font-size:12px;outline:none;margin-bottom:5px;box-sizing:border-box">
+            <textarea id="cron-edit-prompt-${job.id}" rows="3" placeholder="${esc(t('cron_prompt_placeholder'))}" style="width:100%;background:rgba(255,255,255,.05);border:1px solid var(--border2);border-radius:6px;color:var(--text);padding:5px 8px;font-size:12px;outline:none;resize:none;font-family:inherit;margin-bottom:5px;box-sizing:border-box"></textarea>
             <div id="cron-edit-err-${job.id}" style="font-size:11px;color:var(--accent);display:none;margin-bottom:5px"></div>
             <div style="display:flex;gap:6px">
-              <button class="cron-btn run" style="flex:1" onclick="cronEditSave('${job.id}')">Save</button>
-              <button class="cron-btn" style="flex:1" onclick="cronEditClose('${job.id}')">Cancel</button>
+              <button class="cron-btn run" style="flex:1" onclick="cronEditSave('${job.id}')">${esc(t('save'))}</button>
+              <button class="cron-btn" style="flex:1" onclick="cronEditClose('${job.id}')">${esc(t('cancel'))}</button>
             </div>
           </div>
           <div id="cron-output-${job.id}">
             <div class="cron-last-header" style="display:flex;align-items:center;justify-content:space-between">
-              <span>Last output</span>
-              <button class="cron-btn" style="padding:1px 8px;font-size:10px" onclick="loadCronHistory('${job.id}',this)">All runs</button>
+              <span>${esc(t('cron_last_output'))}</span>
+              <button class="cron-btn" style="padding:1px 8px;font-size:10px" onclick="loadCronHistory('${job.id}',this)">${esc(t('cron_all_runs'))}</button>
             </div>
-            <div class="cron-last" id="cron-out-text-${job.id}" style="color:var(--muted);font-size:11px">Loading…</div>
+            <div class="cron-last" id="cron-out-text-${job.id}" style="color:var(--muted);font-size:11px">${esc(t('loading'))}</div>
             <div id="cron-history-${job.id}" style="display:none"></div>
           </div>
         </div>`;
@@ -77,7 +76,7 @@ async function loadCrons() {
       // Eagerly load last output for visible items
       loadCronOutput(job.id);
     }
-  } catch(e) { box.innerHTML = `<div style="padding:12px;color:var(--accent);font-size:12px">Error: ${esc(e.message)}</div>`; }
+  } catch(e) { box.innerHTML = `<div style="padding:12px;color:var(--accent);font-size:12px">${esc(t('error_prefix'))}${esc(e.message)}</div>`; }
 }
 
 let _cronSelectedSkills=[];
@@ -165,18 +164,18 @@ async function submitCronCreate(){
   const deliver=$('cronFormDeliver').value;
   const errEl=$('cronFormError');
   errEl.style.display='none';
-  if(!schedule){errEl.textContent='Schedule is required (e.g. "0 9 * * *" or "every 1h")';errEl.style.display='';return;}
-  if(!prompt){errEl.textContent='Prompt is required';errEl.style.display='';return;}
+  if(!schedule){errEl.textContent=t('cron_schedule_required_example');errEl.style.display='';return;}
+  if(!prompt){errEl.textContent=t('cron_prompt_required');errEl.style.display='';return;}
   try{
     const body={schedule,prompt,deliver};
     if(name)body.name=name;
     if(_cronSelectedSkills.length)body.skills=_cronSelectedSkills;
     await api('/api/crons/create',{method:'POST',body:JSON.stringify(body)});
     toggleCronForm();
-    showToast('Job created ✓');
+    showToast(t('cron_job_created'));
     await loadCrons();
   }catch(e){
-    errEl.textContent='Error: '+e.message;errEl.style.display='';
+    errEl.textContent=t('error_prefix')+e.message;errEl.style.display='';
   }
 }
 
@@ -193,7 +192,7 @@ async function loadCronOutput(jobId) {
     const data = await api(`/api/crons/output?job_id=${encodeURIComponent(jobId)}&limit=1`);
     const el = $('cron-out-text-' + jobId);
     if (!el) return;
-    if (!data.outputs || !data.outputs.length) { el.textContent = '(no runs yet)'; return; }
+    if (!data.outputs || !data.outputs.length) { el.textContent = t('cron_no_runs_yet'); return; }
     const out = data.outputs[0];
     const ts = out.filename.replace('.md','').replace(/_/g,' ');
     el.textContent = ts + '\n\n' + _cronOutputSnippet(out.content);
@@ -206,14 +205,14 @@ async function loadCronHistory(jobId, btn) {
   // Toggle: if already open, close it
   if (histEl.style.display !== 'none') {
     histEl.style.display = 'none';
-    if (btn) btn.textContent = 'All runs';
+    if (btn) btn.textContent = t('cron_all_runs');
     return;
   }
-  if (btn) btn.textContent = 'Loading…';
+  if (btn) btn.textContent = t('loading');
   try {
     const data = await api(`/api/crons/output?job_id=${encodeURIComponent(jobId)}&limit=20`);
     if (!data.outputs || !data.outputs.length) {
-      histEl.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px 0">(no runs yet)</div>';
+      histEl.innerHTML = `<div style="font-size:11px;color:var(--muted);padding:4px 0">${esc(t('cron_no_runs_yet'))}</div>`;
     } else {
       histEl.innerHTML = data.outputs.map((out, i) => {
         const ts = out.filename.replace('.md','').replace(/_/g,' ');
@@ -229,9 +228,9 @@ async function loadCronHistory(jobId, btn) {
       }).join('');
     }
     histEl.style.display = '';
-    if (btn) btn.textContent = 'Hide runs';
+    if (btn) btn.textContent = t('cron_hide_runs');
   } catch(e) {
-    if (btn) btn.textContent = 'All runs';
+    if (btn) btn.textContent = t('cron_all_runs');
   }
 }
 
@@ -243,25 +242,25 @@ function toggleCron(id) {
 async function cronRun(id) {
   try {
     await api('/api/crons/run', {method:'POST', body: JSON.stringify({job_id: id})});
-    showToast('Job triggered ✓');
+    showToast(t('cron_job_triggered'));
     setTimeout(() => loadCronOutput(id), 5000);
-  } catch(e) { showToast('Run failed: ' + e.message, 4000); }
+  } catch(e) { showToast(t('failed_colon') + e.message, 4000); }
 }
 
 async function cronPause(id) {
   try {
     await api('/api/crons/pause', {method:'POST', body: JSON.stringify({job_id: id})});
-    showToast('Job paused');
+    showToast(t('cron_job_paused'));
     await loadCrons();
-  } catch(e) { showToast('Pause failed: ' + e.message, 4000); }
+  } catch(e) { showToast(t('failed_colon') + e.message, 4000); }
 }
 
 async function cronResume(id) {
   try {
     await api('/api/crons/resume', {method:'POST', body: JSON.stringify({job_id: id})});
-    showToast('Job resumed ✓');
+    showToast(t('cron_job_resumed'));
     await loadCrons();
-  } catch(e) { showToast('Resume failed: ' + e.message, 4000); }
+  } catch(e) { showToast(t('failed_colon') + e.message, 4000); }
 }
 
 function cronEditOpen(id, job) {
@@ -285,33 +284,35 @@ async function cronEditSave(id) {
   const schedule = $('cron-edit-schedule-' + id).value.trim();
   const prompt = $('cron-edit-prompt-' + id).value.trim();
   const errEl = $('cron-edit-err-' + id);
-  if (!schedule) { errEl.textContent = 'Schedule is required'; errEl.style.display = ''; return; }
-  if (!prompt) { errEl.textContent = 'Prompt is required'; errEl.style.display = ''; return; }
+  if (!schedule) { errEl.textContent = t('cron_schedule_required'); errEl.style.display = ''; return; }
+  if (!prompt) { errEl.textContent = t('cron_prompt_required'); errEl.style.display = ''; return; }
   try {
     const updates = {job_id: id, schedule, prompt};
     if (name) updates.name = name;
     await api('/api/crons/update', {method:'POST', body: JSON.stringify(updates)});
-    showToast('Job updated ✓');
+    showToast(t('cron_job_updated'));
     await loadCrons();
-  } catch(e) { errEl.textContent = 'Error: ' + e.message; errEl.style.display = ''; }
+  } catch(e) { errEl.textContent = t('error_prefix') + e.message; errEl.style.display = ''; }
 }
 
 async function cronDelete(id) {
-  if (!confirm('Delete this cron job? This cannot be undone.')) return;
+  const _delCron=await showConfirmDialog({title:t('cron_delete_confirm_title'),message:t('cron_delete_confirm_message'),confirmLabel:t('delete_title'),danger:true,focusCancel:true});
+  if(!_delCron) return;
   try {
     await api('/api/crons/delete', {method:'POST', body: JSON.stringify({job_id: id})});
-    showToast('Job deleted');
+    showToast(t('cron_job_deleted'));
     await loadCrons();
-  } catch(e) { showToast('Delete failed: ' + e.message, 4000); }
+  } catch(e) { showToast(t('delete_failed') + e.message, 4000); }
 }
 
 function loadTodos() {
   const panel = $('todoPanel');
   if (!panel) return;
+  const sourceMessages = (S.session && Array.isArray(S.session.messages) && S.session.messages.length) ? S.session.messages : S.messages;
   // Parse the most recent todo state from message history
   let todos = [];
-  for (let i = S.messages.length - 1; i >= 0; i--) {
-    const m = S.messages[i];
+  for (let i = sourceMessages.length - 1; i >= 0; i--) {
+    const m = sourceMessages[i];
     if (m && m.role === 'tool') {
       try {
         const d = JSON.parse(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
@@ -323,14 +324,14 @@ function loadTodos() {
     }
   }
   if (!todos.length) {
-    panel.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:4px 0">No active task list in this session.</div>';
+    panel.innerHTML = `<div style="color:var(--muted);font-size:12px;padding:4px 0">${esc(t('todos_no_active'))}</div>`;
     return;
   }
-  const statusIcon = {pending:'○', in_progress:'◉', completed:'✓', cancelled:'✗'};
+  const statusIcon = {pending:li('square',14), in_progress:li('loader',14), completed:li('check',14), cancelled:li('x',14)};
   const statusColor = {pending:'var(--muted)', in_progress:'var(--blue)', completed:'rgba(100,200,100,.8)', cancelled:'rgba(200,100,100,.5)'};
   panel.innerHTML = todos.map(t => `
     <div style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);">
-      <span style="font-size:14px;flex-shrink:0;margin-top:1px;color:${statusColor[t.status]||'var(--muted)'}">${statusIcon[t.status]||'○'}</span>
+      <span style="font-size:14px;display:inline-flex;align-items:center;flex-shrink:0;margin-top:1px;color:${statusColor[t.status]||'var(--muted)'}">${statusIcon[t.status]||li('square',14)}</span>
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;color:${t.status==='completed'?'var(--muted)':t.status==='in_progress'?'var(--text)':'var(--text)'};${t.status==='completed'?'text-decoration:line-through;opacity:.5':''};line-height:1.4">${esc(t.content)}</div>
         <div style="font-size:10px;color:var(--muted);margin-top:2px;opacity:.6">${esc(t.id)} · ${esc(t.status)}</div>
@@ -340,7 +341,8 @@ function loadTodos() {
 
 async function clearConversation() {
   if(!S.session) return;
-  if(!confirm('Clear all messages in this conversation? This cannot be undone.')) return;
+  const _clrMsg=await showConfirmDialog({title:t('clear_conversation_title'),message:t('clear_conversation_message'),confirmLabel:t('clear'),danger:true,focusCancel:true});
+  if(!_clrMsg) return;
   try {
     const data = await api('/api/session/clear', {method:'POST',
       body: JSON.stringify({session_id: S.session.session_id})});
@@ -349,8 +351,8 @@ async function clearConversation() {
     S.toolCalls = [];
     syncTopbar();
     renderMessages();
-    showToast('Conversation cleared');
-  } catch(e) { setStatus('Clear failed: ' + e.message); }
+    showToast(t('conversation_cleared'));
+  } catch(e) { setStatus(t('clear_failed') + e.message); }
 }
 
 // ── Skills panel ──
@@ -358,13 +360,7 @@ async function loadSkills() {
   if (_skillsData) { renderSkills(_skillsData); return; }
   const box = $('skillsList');
   try {
-    // B6: use /api/skills/evolve for richer skill data (source, evolvable flag)
-    let data;
-    try {
-      data = await api('/api/skills/evolve', {method:'POST', body:JSON.stringify({action:'list'})});
-    } catch {
-      data = await api('/api/skills');  // fallback to old endpoint
-    }
+    const data = await api('/api/skills');
     _skillsData = data.skills || [];
     renderSkills(_skillsData);
   } catch(e) { box.innerHTML = `<div style="padding:12px;color:var(--accent);font-size:12px">Error: ${esc(e.message)}</div>`; }
@@ -386,26 +382,15 @@ function renderSkills(skills) {
   }
   const box = $('skillsList');
   box.innerHTML = '';
-  if (!filtered.length) { box.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">No skills match.</div>'; return; }
-    for (const [cat, items] of Object.entries(cats).sort()) {
+  if (!filtered.length) { box.innerHTML = `<div style="padding:12px;color:var(--muted);font-size:12px">${esc(t('skills_no_match'))}</div>`; return; }
+  for (const [cat, items] of Object.entries(cats).sort()) {
     const sec = document.createElement('div');
     sec.className = 'skills-category';
-    sec.innerHTML = `<div class="skills-cat-header">&#128193; ${esc(cat)} <span style="opacity:.5">(${items.length})</span></div>`;
+    sec.innerHTML = `<div class="skills-cat-header">${li('folder',12)} ${esc(cat)} <span style="opacity:.5">(${items.length})</span></div>`;
     for (const skill of items.sort((a,b) => a.name.localeCompare(b.name))) {
       const el = document.createElement('div');
       el.className = 'skill-item';
-      // B6: source badge + evolve button
-      const srcColor = skill.source === 'zenops' ? 'var(--green)' : 'var(--blue)';
-      const srcLabel = skill.source || 'unknown';
-      const evoBtn = skill.evolvable
-        ? `<button class="skill-evo-btn" title="Evolve ${skill.name}" onclick="event.stopPropagation();evolveSkill('${esc(skill.name)}',this)">&#9650; Evo</button>`
-        : '';
-      el.innerHTML = `
-        <span class="skill-source-badge" style="background:${srcColor};color:#fff;font-size:8px;font-weight:700;padding:1px 4px;border-radius:3px;flex-shrink:0">${esc(srcLabel)}</span>
-        <span class="skill-name">${esc(skill.name)}</span>
-        <span class="skill-desc">${esc(skill.description||'')}</span>
-        ${evoBtn}
-      `;
+      el.innerHTML = `<span class="skill-name">${esc(skill.name)}</span><span class="skill-desc">${esc(skill.description||'')}</span>`;
       el.onclick = () => openSkill(skill.name, el);
       sec.appendChild(el);
     }
@@ -415,46 +400,6 @@ function renderSkills(skills) {
 
 function filterSkills() {
   if (_skillsData) renderSkills(_skillsData);
-}
-
-// B6: Skill evolution — trigger evolve on a skill
-async function evolveSkill(name, btnEl) {
-  if(!confirm(`Run skill evolution for "${name}"?`)) return;
-  if(btnEl){ btnEl.textContent = '...'; btnEl.disabled = true; }
-  setStatus(`Evolving "${name}"...`);
-  try {
-    const data = await api('/api/skills/evolve', {
-      method: 'POST',
-      body: JSON.stringify({ action: 'evolve', skill_name: name }),
-    });
-    setStatus('');
-    if(data.ok) {
-      showToast(`Evolved "${name}" successfully`);
-      // Refresh skills list
-      await loadSkillsPanel();
-    } else {
-      showToast(`Evolve failed: ${(data.result||'').slice(0,80)}`);
-    }
-  } catch(e) {
-    setStatus('');
-    showToast('Evolve error: ' + e.message);
-  } finally {
-    if(btnEl){ btnEl.textContent = '\u25B2 Evo'; btnEl.disabled = false; }
-  }
-}
-
-// Reload skills list (used after evolve)
-async function loadSkillsPanel() {
-  try {
-    const data = await api('/api/skills/evolve', {
-      method: 'POST',
-      body: JSON.stringify({ action: 'list' }),
-    });
-    if(data.ok && data.skills) {
-      _skillsData = data.skills;
-      renderSkills(_skillsData);
-    }
-  } catch(e) {}
 }
 
 async function openSkill(name, el) {
@@ -473,7 +418,7 @@ async function openSkill(name, el) {
     const lf = data.linked_files || {};
     const categories = Object.entries(lf).filter(([,files]) => files && files.length > 0);
     if (categories.length) {
-      html += '<div class="skill-linked-files"><div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Linked Files</div>';
+      html += `<div class="skill-linked-files"><div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">${esc(t('linked_files'))}</div>`;
       for (const [cat, files] of categories) {
         html += `<div class="skill-linked-section"><h4>${esc(cat)}</h4>`;
         for (const f of files) {
@@ -490,7 +435,7 @@ async function openSkill(name, el) {
     });
     $('previewArea').classList.add('visible');
     $('fileTree').style.display = 'none';
-  } catch(e) { setStatus('Could not load skill: ' + e.message); }
+  } catch(e) { setStatus(t('skill_load_failed') + e.message); }
 }
 
 async function openSkillFile(skillName, filePath) {
@@ -508,7 +453,7 @@ async function openSkillFile(skillName, filePath) {
       $('previewCode').textContent = data.content || '';
       requestAnimationFrame(() => highlightCode());
     }
-  } catch(e) { setStatus('Could not load file: ' + e.message); }
+  } catch(e) { setStatus(t('skill_file_load_failed') + e.message); }
 }
 
 // ── Skill create/edit form ──
@@ -534,15 +479,15 @@ async function submitSkillSave() {
   const content = $('skillFormContent').value;
   const errEl = $('skillFormError');
   errEl.style.display = 'none';
-  if (!name) { errEl.textContent = 'Skill name is required'; errEl.style.display = ''; return; }
-  if (!content.trim()) { errEl.textContent = 'Content is required'; errEl.style.display = ''; return; }
+  if (!name) { errEl.textContent = t('skill_name_required'); errEl.style.display = ''; return; }
+  if (!content.trim()) { errEl.textContent = t('content_required'); errEl.style.display = ''; return; }
   try {
     await api('/api/skills/save', {method:'POST', body: JSON.stringify({name, category: category||undefined, content})});
-    showToast(_editingSkillName ? 'Skill updated ✓' : 'Skill created ✓');
+    showToast(_editingSkillName ? t('skill_updated') : t('skill_created'));
     _skillsData = null;
     toggleSkillForm();
     await loadSkills();
-  } catch(e) { errEl.textContent = 'Error: ' + e.message; errEl.style.display = ''; }
+  } catch(e) { errEl.textContent = t('error_prefix') + e.message; errEl.style.display = ''; }
 }
 
 // ── Memory inline edit ──
@@ -553,7 +498,7 @@ function toggleMemoryEdit() {
   if (!form) return;
   const open = form.style.display !== 'none';
   if (open) { form.style.display = 'none'; return; }
-  $('memEditSection').textContent = 'memory (notes)';
+  $('memEditSection').textContent = t('memory_notes_label');
   $('memEditContent').value = _memoryData ? (_memoryData.memory || '') : '';
   $('memEditError').style.display = 'none';
   form.style.display = '';
@@ -570,10 +515,10 @@ async function submitMemorySave() {
   errEl.style.display = 'none';
   try {
     await api('/api/memory/write', {method:'POST', body: JSON.stringify({section: 'memory', content})});
-    showToast('Memory saved ✓');
+    showToast(t('memory_saved'));
     closeMemoryEdit();
     await loadMemory(true);
-  } catch(e) { errEl.textContent = 'Error: ' + e.message; errEl.style.display = ''; }
+  } catch(e) { errEl.textContent = t('error_prefix') + e.message; errEl.style.display = ''; }
 }
 
 // ── Workspace management ──
@@ -588,48 +533,95 @@ function getWorkspaceFriendlyName(path){
   return path.split('/').filter(Boolean).pop()||path;
 }
 
+function syncWorkspaceDisplays(){
+  const hasSession=!!(S.session&&S.session.workspace);
+  const ws=hasSession?S.session.workspace:'';
+  const label=hasSession?getWorkspaceFriendlyName(ws):t('no_workspace');
+
+  const sidebarName=$('sidebarWsName');
+  const sidebarPath=$('sidebarWsPath');
+  if(sidebarName) sidebarName.textContent=label;
+  if(sidebarPath) sidebarPath.textContent=ws;
+
+  const composerChip=$('composerWorkspaceChip');
+  const composerLabel=$('composerWorkspaceLabel');
+  const composerDropdown=$('composerWsDropdown');
+  if(!hasSession && composerDropdown) composerDropdown.classList.remove('open');
+  if(composerLabel) composerLabel.textContent=label;
+  if(composerChip){
+    composerChip.disabled=!hasSession;
+    composerChip.title=hasSession?ws:t('no_workspace');
+    composerChip.classList.toggle('active',!!(composerDropdown&&composerDropdown.classList.contains('open')));
+  }
+}
+
 async function loadWorkspaceList(){
   try{
     const data = await api('/api/workspaces');
     _workspaceList = data.workspaces || [];
-    // Refresh sidebar display if we have a current session
-    if(S.session && S.session.workspace) {
-      const sidebarName=$('sidebarWsName');
-      const sidebarPath=$('sidebarWsPath');
-      if(sidebarName) sidebarName.textContent=getWorkspaceFriendlyName(S.session.workspace);
-      if(sidebarPath) sidebarPath.textContent=S.session.workspace;
-    }
+    syncWorkspaceDisplays();
     return data;
   }catch(e){ return {workspaces:[], last:''}; }
 }
 
-function renderWorkspaceDropdown(workspaces, currentWs){
-  const dd = $('wsDropdown');
+function _renderWorkspaceAction(label, meta, iconSvg, onClick){
+  const opt=document.createElement('div');
+  opt.className='ws-opt ws-opt-action';
+  opt.innerHTML=`<span class="ws-opt-icon">${iconSvg}</span><span><span class="ws-opt-name">${esc(label)}</span>${meta?`<span class="ws-opt-meta">${esc(meta)}</span>`:''}</span>`;
+  opt.onclick=onClick;
+  return opt;
+}
+
+function _positionComposerWsDropdown(){
+  const dd=$('composerWsDropdown');
+  const chip=$('composerWorkspaceChip');
+  const footer=document.querySelector('.composer-footer');
+  if(!dd||!chip||!footer)return;
+  const chipRect=chip.getBoundingClientRect();
+  const footerRect=footer.getBoundingClientRect();
+  let left=chipRect.left-footerRect.left;
+  const maxLeft=Math.max(0, footer.clientWidth-dd.offsetWidth);
+  left=Math.max(0, Math.min(left, maxLeft));
+  dd.style.left=`${left}px`;
+}
+
+function _positionProfileDropdown(){
+  const dd=$('profileDropdown');
+  const chip=$('profileChip');
+  const footer=document.querySelector('.composer-footer');
+  if(!dd||!chip||!footer)return;
+  const chipRect=chip.getBoundingClientRect();
+  const footerRect=footer.getBoundingClientRect();
+  let left=chipRect.left-footerRect.left;
+  const maxLeft=Math.max(0, footer.clientWidth-dd.offsetWidth);
+  left=Math.max(0, Math.min(left, maxLeft));
+  dd.style.left=`${left}px`;
+}
+
+function renderWorkspaceDropdownInto(dd, workspaces, currentWs){
   if(!dd)return;
   dd.innerHTML='';
   for(const w of workspaces){
     const opt=document.createElement('div');
     opt.className='ws-opt'+(w.path===currentWs?' active':'');
     opt.innerHTML=`<span class="ws-opt-name">${esc(w.name)}</span><span class="ws-opt-path">${esc(w.path)}</span>`;
-    opt.onclick=async()=>{
-      closeWsDropdown();
-      if(!S.session||w.path===S.session.workspace)return;
-      await api('/api/session/update',{method:'POST',body:JSON.stringify({
-        session_id:S.session.session_id, workspace:w.path, model:S.session.model
-      })});
-      S.session.workspace=w.path;
-      syncTopbar();
-      await loadDir('.');
-      showToast(`Switched to ${w.name}`);
-    };
+    opt.onclick=()=>switchToWorkspace(w.path,w.name);
     dd.appendChild(opt);
   }
-  // Divider + Manage link
+  dd.appendChild(document.createElement('div')).className='ws-divider';
+  dd.appendChild(_renderWorkspaceAction(
+    t('workspace_choose_path'),
+    t('workspace_choose_path_meta'),
+    li('folder',12),
+    ()=>promptWorkspacePath()
+  ));
   const div=document.createElement('div');div.className='ws-divider';dd.appendChild(div);
-  const mgmt=document.createElement('div');mgmt.className='ws-opt ws-manage';
-  mgmt.innerHTML='&#9881; Manage workspaces';
-  mgmt.onclick=()=>{closeWsDropdown();switchPanel('workspaces');};
-  dd.appendChild(mgmt);
+  dd.appendChild(_renderWorkspaceAction(
+    t('workspace_manage'),
+    t('workspace_manage_meta'),
+    li('settings',12),
+    ()=>{closeWsDropdown();mobileSwitchPanel('workspaces');}
+  ));
 }
 
 function toggleWsDropdown(){
@@ -640,18 +632,47 @@ function toggleWsDropdown(){
   else{
     closeProfileDropdown(); // close profile dropdown if open
     loadWorkspaceList().then(data=>{
-      renderWorkspaceDropdown(data.workspaces, S.session?S.session.workspace:'');
+      renderWorkspaceDropdownInto(dd, data.workspaces, S.session?S.session.workspace:'');
       dd.classList.add('open');
+    });
+  }
+}
+
+function toggleComposerWsDropdown(){
+  const dd=$('composerWsDropdown');
+  const chip=$('composerWorkspaceChip');
+  if(!dd||!chip||chip.disabled)return;
+  const open=dd.classList.contains('open');
+  if(open){closeWsDropdown();}
+  else{
+    closeProfileDropdown();
+    if(typeof closeModelDropdown==='function') closeModelDropdown();
+    loadWorkspaceList().then(data=>{
+      renderWorkspaceDropdownInto(dd, data.workspaces, S.session?S.session.workspace:'');
+      dd.classList.add('open');
+      _positionComposerWsDropdown();
+      chip.classList.add('active');
     });
   }
 }
 
 function closeWsDropdown(){
   const dd=$('wsDropdown');
+  const composerDd=$('composerWsDropdown');
+  const composerChip=$('composerWorkspaceChip');
   if(dd)dd.classList.remove('open');
+  if(composerDd)composerDd.classList.remove('open');
+  if(composerChip)composerChip.classList.remove('active');
 }
 document.addEventListener('click',e=>{
-  if(!e.target.closest('#sidebarWsDisplay') && !e.target.closest('#wsDropdown'))closeWsDropdown();
+  if(
+    !e.target.closest('#composerWorkspaceChip') &&
+    !e.target.closest('#composerWsDropdown')
+  ) closeWsDropdown();
+});
+window.addEventListener('resize',()=>{
+  const dd=$('composerWsDropdown');
+  if(dd&&dd.classList.contains('open')) _positionComposerWsDropdown();
 });
 
 async function loadWorkspacesPanel(){
@@ -672,19 +693,19 @@ function renderWorkspacesPanel(workspaces){
         <div class="ws-row-path">${esc(w.path)}</div>
       </div>
       <div class="ws-row-actions">
-        <button class="ws-action-btn" title="Use in current session" onclick="switchToWorkspace('${esc(w.path)}','${esc(w.name)}')">&#8594; Use</button>
-        <button class="ws-action-btn danger" title="Remove" onclick="removeWorkspace('${esc(w.path)}')">&#10005;</button>
+        <button class="ws-action-btn" title="${esc(t('workspace_use_title'))}" onclick="switchToWorkspace('${esc(w.path)}','${esc(w.name)}')">${li('arrow-right',12)} ${esc(t('workspace_use'))}</button>
+        <button class="ws-action-btn danger" title="${esc(t('remove'))}" onclick="removeWorkspace('${esc(w.path)}')">${li('x',12)}</button>
       </div>`;
     panel.appendChild(row);
   }
   const addRow=document.createElement('div');addRow.className='ws-add-row';
   addRow.innerHTML=`
-    <input id="wsAddInput" placeholder="Add workspace path (e.g. /home/user/my-project)" style="flex:1;background:rgba(255,255,255,.06);border:1px solid var(--border2);border-radius:7px;color:var(--text);padding:7px 10px;font-size:12px;outline:none;">
-    <button class="ws-action-btn" onclick="addWorkspace()">&#43; Add</button>`;
+    <input id="wsAddInput" placeholder="${esc(t('workspace_add_path_placeholder'))}" style="flex:1;background:rgba(255,255,255,.06);border:1px solid var(--border2);border-radius:7px;color:var(--text);padding:7px 10px;font-size:12px;outline:none;">
+    <button class="ws-action-btn" onclick="addWorkspace()">${li('plus',12)} ${esc(t('add'))}</button>`;
   panel.appendChild(addRow);
   const hint=document.createElement('div');
   hint.style.cssText='font-size:11px;color:var(--muted);padding:4px 0 8px';
-  hint.textContent='Paths are validated as existing directories before saving.';
+  hint.textContent=t('workspace_paths_validated_hint');
   panel.appendChild(hint);
 }
 
@@ -697,31 +718,74 @@ async function addWorkspace(){
     _workspaceList=data.workspaces;
     renderWorkspacesPanel(data.workspaces);
     if(input)input.value='';
-    showToast('Workspace added');
-  }catch(e){setStatus('Add failed: '+e.message);}
+    showToast(t('workspace_added'));
+  }catch(e){setStatus(t('add_failed')+e.message);}
 }
 
 async function removeWorkspace(path){
-  if(!confirm(`Remove workspace "${path}"?`))return;
+  const _rmWs=await showConfirmDialog({title:t('workspace_remove_confirm_title'),message:t('workspace_remove_confirm_message',path),confirmLabel:t('remove'),danger:true,focusCancel:true});
+  if(!_rmWs) return;
   try{
     const data=await api('/api/workspaces/remove',{method:'POST',body:JSON.stringify({path})});
     _workspaceList=data.workspaces;
     renderWorkspacesPanel(data.workspaces);
-    showToast('Workspace removed');
-  }catch(e){setStatus('Remove failed: '+e.message);}
+    showToast(t('workspace_removed'));
+  }catch(e){setStatus(t('remove_failed')+e.message);}
+}
+
+async function promptWorkspacePath(){
+  if(!S.session)return;
+  const value=await showPromptDialog({
+    title:t('workspace_switch_prompt_title'),
+    message:t('workspace_switch_prompt_message'),
+    confirmLabel:t('workspace_switch_prompt_confirm'),
+    placeholder:t('workspace_switch_prompt_placeholder'),
+    value:S.session.workspace||''
+  });
+  const path=(value||'').trim();
+  if(!path)return;
+  try{
+    const data=await api('/api/workspaces/add',{method:'POST',body:JSON.stringify({path})});
+    _workspaceList=data.workspaces||[];
+    const target=_workspaceList[_workspaceList.length-1];
+    if(!target) throw new Error(t('workspace_not_added'));
+    await switchToWorkspace(target.path,target.name);
+  }catch(e){
+    if(String(e.message||'').includes('Workspace already in list')){
+      showToast(t('workspace_already_saved'));
+      return;
+    }
+    showToast(t('workspace_switch_failed')+e.message);
+  }
 }
 
 async function switchToWorkspace(path,name){
   if(!S.session)return;
+  if(S.busy){
+    showToast(t('workspace_busy_switch'));
+    return;
+  }
+  if(typeof _previewDirty!=='undefined'&&_previewDirty){
+    const discard=await showConfirmDialog({
+      title:t('discard_file_edits_title'),
+      message:t('discard_file_edits_message'),
+      confirmLabel:t('discard'),
+      danger:true
+    });
+    if(!discard)return;
+    if(typeof cancelEditMode==='function')cancelEditMode();
+    if(typeof clearPreview==='function')clearPreview();
+  }
   try{
+    closeWsDropdown();
     await api('/api/session/update',{method:'POST',body:JSON.stringify({
       session_id:S.session.session_id, workspace:path, model:S.session.model
     })});
     S.session.workspace=path;
     syncTopbar();
     await loadDir('.');
-    showToast(`Switched to ${name}`);
-  }catch(e){setStatus('Switch failed: '+e.message);}
+    showToast(t('workspace_switched_to',name||getWorkspaceFriendlyName(path)));
+  }catch(e){setStatus(t('switch_failed')+e.message);}
 }
 
 // ── Profile panel + dropdown ──
@@ -735,7 +799,7 @@ async function loadProfilesPanel() {
     _profilesCache = data;
     panel.innerHTML = '';
     if (!data.profiles || !data.profiles.length) {
-      panel.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">No profiles found.</div>';
+      panel.innerHTML = `<div style="padding:16px;color:var(--muted);font-size:12px">${esc(t('profiles_no_profiles'))}</div>`;
       return;
     }
     for (const p of data.profiles) {
@@ -744,22 +808,22 @@ async function loadProfilesPanel() {
       const meta = [];
       if (p.model) meta.push(p.model.split('/').pop());
       if (p.provider) meta.push(p.provider);
-      if (p.skill_count) meta.push(p.skill_count + ' skill' + (p.skill_count !== 1 ? 's' : ''));
-      if (p.has_env) meta.push('API keys configured');
+      if (p.skill_count) meta.push(t('profile_skill_count', p.skill_count));
+      if (p.has_env) meta.push(t('profile_api_keys_configured'));
       const gwDot = p.gateway_running
-        ? '<span class="profile-opt-badge running" title="Gateway running"></span>'
-        : '<span class="profile-opt-badge stopped" title="Gateway stopped"></span>';
+        ? `<span class="profile-opt-badge running" title="${esc(t('profile_gateway_running'))}"></span>`
+        : `<span class="profile-opt-badge stopped" title="${esc(t('profile_gateway_stopped'))}"></span>`;
       const isActive = p.name === data.active;
-      const activeBadge = isActive ? '<span style="color:var(--link);font-size:10px;font-weight:600;margin-left:6px">ACTIVE</span>' : '';
+      const activeBadge = isActive ? `<span style="color:var(--link);font-size:10px;font-weight:600;margin-left:6px">${esc(t('profile_active'))}</span>` : '';
       card.innerHTML = `
         <div class="profile-card-header">
           <div style="min-width:0;flex:1">
             <div class="profile-card-name${isActive ? ' is-active' : ''}">${gwDot}${esc(p.name)}${p.is_default ? ' <span style="opacity:.5">(default)</span>' : ''}${activeBadge}</div>
-            ${meta.length ? `<div class="profile-card-meta">${esc(meta.join(' \u00b7 '))}</div>` : '<div class="profile-card-meta">No configuration</div>'}
+            ${meta.length ? `<div class="profile-card-meta">${esc(meta.join(' \u00b7 '))}</div>` : `<div class="profile-card-meta">${esc(t('profile_no_configuration'))}</div>`}
           </div>
           <div class="profile-card-actions">
-            ${!isActive ? `<button class="ws-action-btn" onclick="switchToProfile('${esc(p.name)}')" title="Switch to this profile">Use</button>` : ''}
-            ${!p.is_default ? `<button class="ws-action-btn danger" onclick="deleteProfile('${esc(p.name)}')" title="Delete this profile">&#10005;</button>` : ''}
+            ${!isActive ? `<button class="ws-action-btn" onclick="switchToProfile('${esc(p.name)}')" title="${esc(t('profile_switch_title'))}">${esc(t('profile_use'))}</button>` : ''}
+            ${!p.is_default ? `<button class="ws-action-btn danger" onclick="deleteProfile('${esc(p.name)}')" title="${esc(t('profile_delete_title'))}">${li('x',12)}</button>` : ''}
           </div>
         </div>`;
       panel.appendChild(card);
@@ -780,7 +844,7 @@ function renderProfileDropdown(data) {
     opt.className = 'profile-opt' + (p.name === active ? ' active' : '');
     const meta = [];
     if (p.model) meta.push(p.model.split('/').pop());
-    if (p.skill_count) meta.push(p.skill_count + ' skills');
+    if (p.skill_count) meta.push(t('profile_skill_count', p.skill_count));
     const gwDot = `<span class="profile-opt-badge ${p.gateway_running ? 'running' : 'stopped'}"></span>`;
     const checkmark = p.name === active ? ' <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--link)" stroke-width="3" style="vertical-align:-1px"><polyline points="20 6 9 17 4 12"/></svg>' : '';
     opt.innerHTML = `<div class="profile-opt-name">${gwDot}${esc(p.name)}${p.is_default ? ' <span style="opacity:.5;font-weight:400">(default)</span>' : ''}${checkmark}</div>` +
@@ -795,8 +859,8 @@ function renderProfileDropdown(data) {
   // Divider + Manage link
   const div = document.createElement('div'); div.className = 'ws-divider'; dd.appendChild(div);
   const mgmt = document.createElement('div'); mgmt.className = 'profile-opt ws-manage';
-  mgmt.innerHTML = '&#9881; Manage profiles';
-  mgmt.onclick = () => { closeProfileDropdown(); switchPanel('profiles'); };
+  mgmt.innerHTML = `${li('settings',12)} ${esc(t('manage_profiles'))}`;
+  mgmt.onclick = () => { closeProfileDropdown(); mobileSwitchPanel('profiles'); };
   dd.appendChild(mgmt);
 }
 
@@ -805,22 +869,32 @@ function toggleProfileDropdown() {
   if (!dd) return;
   if (dd.classList.contains('open')) { closeProfileDropdown(); return; }
   closeWsDropdown(); // close workspace dropdown if open
+  if(typeof closeModelDropdown==='function') closeModelDropdown();
   api('/api/profiles').then(data => {
     renderProfileDropdown(data);
     dd.classList.add('open');
-  }).catch(e => { showToast('Failed to load profiles'); });
+    _positionProfileDropdown();
+    const chip=$('profileChip');
+    if(chip) chip.classList.add('active');
+  }).catch(e => { showToast(t('profiles_load_failed')); });
 }
 
 function closeProfileDropdown() {
   const dd = $('profileDropdown');
   if (dd) dd.classList.remove('open');
+  const chip=$('profileChip');
+  if(chip) chip.classList.remove('active');
 }
 document.addEventListener('click', e => {
-  if (!e.target.closest('#profileChipWrap')) closeProfileDropdown();
+  if (!e.target.closest('#profileChipWrap') && !e.target.closest('#profileDropdown')) closeProfileDropdown();
+});
+window.addEventListener('resize',()=>{
+  const dd=$('profileDropdown');
+  if(dd&&dd.classList.contains('open')) _positionProfileDropdown();
 });
 
 async function switchToProfile(name) {
-  if (S.busy) { showToast('Cannot switch profiles while agent is running'); return; }
+  if (S.busy) { showToast(t('profiles_busy_switch')); return; }
 
   // Determine whether the current session has any messages.
   // A session with messages is "in progress" and belongs to the current profile —
@@ -873,13 +947,25 @@ async function switchToProfile(name) {
       // The current session has messages and belongs to the previous profile.
       // Start a new session for the new profile so nothing gets cross-tagged.
       await newSession(false);
+      // Apply profile default workspace to the newly created session (fixes #424)
+      if (S._profileDefaultWorkspace && S.session) {
+        try {
+          await api('/api/session/update', { method: 'POST', body: JSON.stringify({
+            session_id: S.session.session_id,
+            workspace: S._profileDefaultWorkspace,
+            model: S.session.model,
+          })});
+          S.session.workspace = S._profileDefaultWorkspace;
+        } catch (_) {}
+      }
+      updateWorkspaceChip();
       await renderSessionList();
-      showToast('Switched to profile: ' + name + ' — new conversation started');
+      showToast(t('profile_switched_new_conversation', name));
     } else {
       // No messages yet — just refresh the list and topbar in place
       await renderSessionList();
       syncTopbar();
-      showToast('Switched to profile: ' + name);
+      showToast(t('profile_switched', name));
     }
 
     // ── Sidebar panels ─────────────────────────────────────────────────────
@@ -889,7 +975,7 @@ async function switchToProfile(name) {
     if (_currentPanel === 'profiles') await loadProfilesPanel();
     if (_currentPanel === 'workspaces') await loadWorkspacesPanel();
 
-  } catch (e) { showToast('Switch failed: ' + e.message); }
+  } catch (e) { showToast(t('switch_failed') + e.message); }
 }
 
 function toggleProfileForm() {
@@ -899,6 +985,8 @@ function toggleProfileForm() {
   if (form.style.display !== 'none') {
     $('profileFormName').value = '';
     $('profileFormClone').checked = false;
+    if ($('profileFormBaseUrl')) $('profileFormBaseUrl').value = '';
+    if ($('profileFormApiKey')) $('profileFormApiKey').value = '';
     const errEl = $('profileFormError');
     if (errEl) errEl.style.display = 'none';
     $('profileFormName').focus();
@@ -909,23 +997,35 @@ async function submitProfileCreate() {
   const name = ($('profileFormName').value || '').trim().toLowerCase();
   const cloneConfig = $('profileFormClone').checked;
   const errEl = $('profileFormError');
-  if (!name) { errEl.textContent = 'Name is required'; errEl.style.display = ''; return; }
-  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) { errEl.textContent = 'Lowercase letters, numbers, hyphens, underscores only'; errEl.style.display = ''; return; }
+  if (!name) { errEl.textContent = t('name_required'); errEl.style.display = ''; return; }
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) { errEl.textContent = t('profile_name_rule'); errEl.style.display = ''; return; }
   try {
-    await api('/api/profile/create', { method: 'POST', body: JSON.stringify({ name, clone_config: cloneConfig }) });
+    const baseUrl = (($('profileFormBaseUrl') && $('profileFormBaseUrl').value) || '').trim();
+    const apiKey = (($('profileFormApiKey') && $('profileFormApiKey').value) || '').trim();
+    if (baseUrl && !/^https?:\/\//.test(baseUrl)) {
+      errEl.textContent = t('profile_base_url_rule'); errEl.style.display = ''; return;
+    }
+    const payload = { name, clone_config: cloneConfig };
+    if (baseUrl) payload.base_url = baseUrl;
+    if (apiKey) payload.api_key = apiKey;
+    await api('/api/profile/create', { method: 'POST', body: JSON.stringify(payload) });
     toggleProfileForm();
     await loadProfilesPanel();
-    showToast('Profile created: ' + name);
-  } catch (e) { errEl.textContent = e.message || 'Create failed'; errEl.style.display = ''; }
+    showToast(t('profile_created', name));
+  } catch (e) {
+    errEl.textContent = e.message || t('create_failed');
+    errEl.style.display = '';
+  }
 }
 
 async function deleteProfile(name) {
-  if (!confirm(`Delete profile "${name}"? This removes all config, skills, memory, and sessions for this profile.`)) return;
+  const _delProf=await showConfirmDialog({title:t('profile_delete_confirm_title',name),message:t('profile_delete_confirm_message'),confirmLabel:t('delete_title'),danger:true,focusCancel:true});
+  if(!_delProf) return;
   try {
     await api('/api/profile/delete', { method: 'POST', body: JSON.stringify({ name }) });
     await loadProfilesPanel();
-    showToast('Profile deleted: ' + name);
-  } catch (e) { showToast('Delete failed: ' + e.message); }
+    showToast(t('profile_deleted', name));
+  } catch (e) { showToast(t('delete_failed') + e.message); }
 }
 
 // ── Memory panel ──
@@ -938,23 +1038,23 @@ async function loadMemory(force) {
     panel.innerHTML = `
       <div class="memory-section">
         <div class="memory-section-title">
-          &#129504; My Notes
+          <span style="display:inline-flex;align-items:center;gap:6px">${li('brain',14)} ${esc(t('my_notes'))}</span>
           <span class="memory-mtime">${fmtTime(data.memory_mtime)}</span>
         </div>
         ${data.memory
           ? `<div class="memory-content preview-md">${renderMd(data.memory)}</div>`
-          : '<div class="memory-empty">No notes yet.</div>'}
+          : `<div class="memory-empty">${esc(t('no_notes_yet'))}</div>`}
       </div>
       <div class="memory-section">
         <div class="memory-section-title">
-          &#128100; User Profile
+          <span style="display:inline-flex;align-items:center;gap:6px">${li('user',14)} ${esc(t('user_profile'))}</span>
           <span class="memory-mtime">${fmtTime(data.user_mtime)}</span>
         </div>
         ${data.user
           ? `<div class="memory-content preview-md">${renderMd(data.user)}</div>`
-          : '<div class="memory-empty">No profile yet.</div>'}
+          : `<div class="memory-empty">${esc(t('no_profile_yet'))}</div>`}
       </div>`;
-  } catch(e) { panel.innerHTML = `<div style="color:var(--accent);font-size:12px">Error: ${esc(e.message)}</div>`; }
+  } catch(e) { panel.innerHTML = `<div style="color:var(--accent);font-size:12px">${esc(t('error_prefix'))}${esc(e.message)}</div>`; }
 }
 
 // Drag and drop
@@ -966,20 +1066,134 @@ document.addEventListener('drop',e=>{e.preventDefault();dragCounter=0;wrap.class
 
 // ── Settings panel ───────────────────────────────────────────────────────────
 
+let _settingsDirty = false;
+let _settingsThemeOnOpen = null; // track theme at open time for discard revert
+let _settingsSection = 'conversation';
+
+function switchSettingsSection(name){
+  const section=(name==='preferences'||name==='system')?name:'conversation';
+  _settingsSection=section;
+  const map={conversation:'Conversation',preferences:'Preferences',system:'System'};
+  ['conversation','preferences','system'].forEach(key=>{
+    const tab=$('settingsTab'+map[key]);
+    const pane=$('settingsPane'+map[key]);
+    const active=key===section;
+    if(tab){
+      tab.classList.toggle('active',active);
+      tab.setAttribute('aria-selected',active?'true':'false');
+    }
+    if(pane) pane.classList.toggle('active',active);
+  });
+}
+
+function _syncHermesPanelSessionActions(){
+  const hasSession=!!S.session;
+  const visibleMessages=hasSession?(S.messages||[]).filter(m=>m&&m.role&&m.role!=='tool').length:0;
+  const title=hasSession?(S.session.title||t('untitled')):t('active_conversation_none');
+  const meta=$('hermesSessionMeta');
+  if(meta){
+    meta.textContent=hasSession
+      ? t('active_conversation_meta', title, visibleMessages)
+      : t('active_conversation_none');
+  }
+  const setDisabled=(id,disabled)=>{
+    const el=$(id);
+    if(!el)return;
+    el.disabled=!!disabled;
+    el.classList.toggle('disabled',!!disabled);
+  };
+  setDisabled('btnDownload',!hasSession||visibleMessages===0);
+  setDisabled('btnExportJSON',!hasSession);
+  setDisabled('btnClearConvModal',!hasSession||visibleMessages===0);
+}
+
 function toggleSettings(){
   const overlay=$('settingsOverlay');
   if(!overlay) return;
   if(overlay.style.display==='none'){
+    _settingsDirty = false;
+    _settingsThemeOnOpen = document.documentElement.dataset.theme || 'dark';
+    _settingsSection = 'conversation';
     overlay.style.display='';
     loadSettingsPanel();
   } else {
-    overlay.style.display='none';
+    _closeSettingsPanel();
   }
+}
+
+function _resetSettingsPanelState(){
+  _settingsSection = 'conversation';
+  switchSettingsSection('conversation');
+  const bar=$('settingsUnsavedBar');
+  if(bar) bar.style.display='none';
+}
+
+function _hideSettingsPanel(){
+  const overlay=$('settingsOverlay');
+  if(!overlay) return;
+  _resetSettingsPanelState();
+  overlay.style.display='none';
+}
+
+// Close with unsaved-changes check. If dirty, show a confirm dialog.
+function _closeSettingsPanel(){
+  if(!_settingsDirty){
+    // Nothing changed -- revert any live preview and close
+    _revertSettingsPreview();
+    _hideSettingsPanel();
+    return;
+  }
+  // Dirty -- show inline confirm bar
+  _showSettingsUnsavedBar();
+}
+
+// Revert live DOM/localStorage to what they were when the panel opened
+function _revertSettingsPreview(){
+  if(_settingsThemeOnOpen){
+    document.documentElement.dataset.theme = _settingsThemeOnOpen;
+    localStorage.setItem('hermes-theme', _settingsThemeOnOpen);
+  }
+}
+
+// Show the "Unsaved changes" bar inside the settings panel
+function _showSettingsUnsavedBar(){
+  let bar = $('settingsUnsavedBar');
+  if(bar){ bar.style.display=''; return; }
+  // Create it
+  bar = document.createElement('div');
+  bar.id = 'settingsUnsavedBar';
+  bar.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;background:rgba(233,69,96,.12);border:1px solid rgba(233,69,96,.3);border-radius:8px;padding:10px 14px;margin:0 0 12px;font-size:13px;';
+  bar.innerHTML = `<span style="color:var(--text)">${esc(t('settings_unsaved_changes'))}</span>`
+    + '<span style="display:flex;gap:8px">'
+    + `<button onclick="_discardSettings()" style="padding:5px 12px;border-radius:6px;border:1px solid var(--border2);background:rgba(255,255,255,.06);color:var(--muted);cursor:pointer;font-size:12px;font-weight:600">${esc(t('discard'))}</button>`
+    + `<button onclick="saveSettings(true)" style="padding:5px 12px;border-radius:6px;border:none;background:var(--accent);color:#fff;cursor:pointer;font-size:12px;font-weight:600">${esc(t('save'))}</button>`
+    + '</span>';
+  const body = document.querySelector('.settings-main') || document.querySelector('.settings-body') || document.querySelector('.settings-panel');
+  if(body) body.prepend(bar);
+}
+
+function _discardSettings(){
+  _revertSettingsPreview();
+  _settingsDirty = false;
+  _hideSettingsPanel();
+}
+
+// Mark settings as dirty whenever anything changes
+function _markSettingsDirty(){
+  _settingsDirty = true;
 }
 
 async function loadSettingsPanel(){
   try{
     const settings=await api('/api/settings');
+    const resolvedLanguage=(typeof resolvePreferredLocale==='function')
+      ? resolvePreferredLocale(settings.language, localStorage.getItem('hermes-lang'))
+      : (settings.language || localStorage.getItem('hermes-lang') || 'en');
+    // Keep settings modal and current page strings in sync with the resolved locale.
+    if(typeof setLocale==='function'){
+      setLocale(resolvedLanguage);
+      if(typeof applyLocaleToDOM==='function') applyLocaleToDOM();
+    }
     // Populate model dropdown from /api/models
     const modelSel=$('settingsModel');
     if(modelSel){
@@ -998,80 +1212,134 @@ async function loadSettingsPanel(){
         }
       }catch(e){}
       modelSel.value=settings.default_model||'';
-    }
-    // Populate workspace dropdown from /api/workspaces
-    const wsSel=$('settingsWorkspace');
-    if(wsSel){
-      wsSel.innerHTML='';
-      try{
-        const wsData=await api('/api/workspaces');
-        for(const w of (wsData.workspaces||[])){
-          const opt=document.createElement('option');
-          opt.value=w.path;opt.textContent=w.name||w.path;
-          wsSel.appendChild(opt);
-        }
-      }catch(e){}
-      wsSel.value=settings.default_workspace||'';
+      modelSel.addEventListener('change',_markSettingsDirty,{once:false});
     }
     // Send key preference
     const sendKeySel=$('settingsSendKey');
-    if(sendKeySel) sendKeySel.value=settings.send_key||'enter';
+    if(sendKeySel){sendKeySel.value=settings.send_key||'enter';sendKeySel.addEventListener('change',_markSettingsDirty,{once:false});}
+    // Theme preference
+    const themeSel=$('settingsTheme');
+    if(themeSel){themeSel.value=settings.theme||'dark';themeSel.addEventListener('change',_markSettingsDirty,{once:false});}
+    // Language preference — populate from LOCALES bundle
+    const langSel=$('settingsLanguage');
+    if(langSel){
+      langSel.innerHTML='';
+      if(typeof LOCALES!=='undefined'){
+        for(const [code,bundle] of Object.entries(LOCALES)){
+          const opt=document.createElement('option');
+          opt.value=code;opt.textContent=bundle._label||code;
+          langSel.appendChild(opt);
+        }
+      }
+      langSel.value=resolvedLanguage;
+      langSel.addEventListener('change',_markSettingsDirty,{once:false});
+    }
     const showUsageCb=$('settingsShowTokenUsage');
-    if(showUsageCb) showUsageCb.checked=!!settings.show_token_usage;
+    if(showUsageCb){showUsageCb.checked=!!settings.show_token_usage;showUsageCb.addEventListener('change',_markSettingsDirty,{once:false});}
     const showCliCb=$('settingsShowCliSessions');
-    if(showCliCb) showCliCb.checked=!!settings.show_cli_sessions;
+    if(showCliCb){showCliCb.checked=!!settings.show_cli_sessions;showCliCb.addEventListener('change',_markSettingsDirty,{once:false});}
+    const syncCb=$('settingsSyncInsights');
+    if(syncCb){syncCb.checked=!!settings.sync_to_insights;syncCb.addEventListener('change',_markSettingsDirty,{once:false});}
+    const updateCb=$('settingsCheckUpdates');
+    if(updateCb){updateCb.checked=settings.check_for_updates!==false;updateCb.addEventListener('change',_markSettingsDirty,{once:false});}
+    const soundCb=$('settingsSoundEnabled');
+    if(soundCb){soundCb.checked=!!settings.sound_enabled;soundCb.addEventListener('change',_markSettingsDirty,{once:false});}
+    const notifCb=$('settingsNotificationsEnabled');
+    if(notifCb){notifCb.checked=!!settings.notifications_enabled;notifCb.addEventListener('change',_markSettingsDirty,{once:false});}
+    const bubbleCb=$('settingsBubbleLayout');
+    if(bubbleCb){bubbleCb.checked=!!settings.bubble_layout;bubbleCb.addEventListener('change',_markSettingsDirty,{once:false});}
+    // Bot name
+    const botNameField=$('settingsBotName');
+    if(botNameField){botNameField.value=settings.bot_name||'Hermes';botNameField.addEventListener('input',_markSettingsDirty,{once:false});}
     // Password field: always blank (we don't send hash back)
     const pwField=$('settingsPassword');
-    if(pwField) pwField.value='';
+    if(pwField){pwField.value='';pwField.addEventListener('input',_markSettingsDirty,{once:false});}
     // Show auth buttons only when auth is active
     try{
       const authStatus=await api('/api/auth/status');
-      const active=authStatus.auth_enabled;
-      const signOutBtn=$('btnSignOut');
-      if(signOutBtn) signOutBtn.style.display=active?'':'none';
-      const disableBtn=$('btnDisableAuth');
-      if(disableBtn) disableBtn.style.display=active?'':'none';
+      _setSettingsAuthButtonsVisible(!!authStatus.auth_enabled);
     }catch(e){}
+    _syncHermesPanelSessionActions();
+    switchSettingsSection(_settingsSection);
   }catch(e){
-    showToast('Failed to load settings: '+e.message);
+    showToast(t('settings_load_failed')+e.message);
   }
 }
 
-async function saveSettings(){
+function _setSettingsAuthButtonsVisible(active){
+  const signOutBtn=$('btnSignOut');
+  if(signOutBtn) signOutBtn.style.display=active?'':'none';
+  const disableBtn=$('btnDisableAuth');
+  if(disableBtn) disableBtn.style.display=active?'':'none';
+}
+
+function _applySavedSettingsUi(saved, body, opts){
+  const {sendKey,showTokenUsage,showCliSessions,theme,language}=opts;
+  window._sendKey=sendKey||'enter';
+  window._showTokenUsage=showTokenUsage;
+  window._showCliSessions=showCliSessions;
+  window._soundEnabled=body.sound_enabled;
+  window._notificationsEnabled=body.notifications_enabled;
+  window._botName=body.bot_name||'Hermes';
+  document.body.classList.toggle('bubble-layout', !!body.bubble_layout);
+  if(typeof applyBotName==='function') applyBotName();
+  if(typeof setLocale==='function') setLocale(language);
+  if(typeof applyLocaleToDOM==='function') applyLocaleToDOM();
+  if(typeof startGatewaySSE==='function'){
+    if(showCliSessions) startGatewaySSE();
+    else if(typeof stopGatewaySSE==='function') stopGatewaySSE();
+  }
+  _setSettingsAuthButtonsVisible(!!saved.auth_enabled);
+  _settingsDirty=false;
+  _settingsThemeOnOpen=theme;
+  const bar=$('settingsUnsavedBar');
+  if(bar) bar.style.display='none';
+  renderMessages();
+  if(typeof syncTopbar==='function') syncTopbar();
+  if(typeof renderSessionList==='function') renderSessionList();
+}
+
+async function saveSettings(andClose){
   const model=($('settingsModel')||{}).value;
-  const workspace=($('settingsWorkspace')||{}).value;
   const sendKey=($('settingsSendKey')||{}).value;
   const showTokenUsage=!!($('settingsShowTokenUsage')||{}).checked;
   const showCliSessions=!!($('settingsShowCliSessions')||{}).checked;
   const pw=($('settingsPassword')||{}).value;
+  const theme=($('settingsTheme')||{}).value||'dark';
+  const language=($('settingsLanguage')||{}).value||'en';
   const body={};
   if(model) body.default_model=model;
-  if(workspace) body.default_workspace=workspace;
+
   if(sendKey) body.send_key=sendKey;
+  body.theme=theme;
+  body.language=language;
   body.show_token_usage=showTokenUsage;
   body.show_cli_sessions=showCliSessions;
+  body.sync_to_insights=!!($('settingsSyncInsights')||{}).checked;
+  body.check_for_updates=!!($('settingsCheckUpdates')||{}).checked;
+  body.sound_enabled=!!($('settingsSoundEnabled')||{}).checked;
+  body.notifications_enabled=!!($('settingsNotificationsEnabled')||{}).checked;
+  body.bubble_layout=!!($('settingsBubbleLayout')||{}).checked;
+  document.body.classList.toggle('bubble-layout', body.bubble_layout);
+  const botName=(($('settingsBotName')||{}).value||'').trim();
+  body.bot_name=botName||'Hermes';
   // Password: only act if the field has content; blank = leave auth unchanged
   if(pw && pw.trim()){
     try{
-      await api('/api/settings',{method:'POST',body:JSON.stringify({...body,_set_password:pw.trim()})});
-      window._sendKey=sendKey||'enter';
-      window._showTokenUsage=showTokenUsage;
-      showToast('Settings saved (password set — login now required)');
-      toggleSettings();
+      const saved=await api('/api/settings',{method:'POST',body:JSON.stringify({...body,_set_password:pw.trim()})});
+      _applySavedSettingsUi(saved, body, {sendKey,showTokenUsage,showCliSessions,theme,language});
+      showToast(t(saved.auth_just_enabled?'settings_saved_pw':'settings_saved_pw_updated'));
+      _hideSettingsPanel();
       return;
-    }catch(e){showToast('Save failed: '+e.message);return;}
+    }catch(e){showToast(t('settings_save_failed')+e.message);return;}
   }
   try{
-    await api('/api/settings',{method:'POST',body:JSON.stringify(body)});
-    window._sendKey=sendKey||'enter';
-    window._showTokenUsage=showTokenUsage;
-    window._showCliSessions=showCliSessions;
-    renderMessages();
-    if(typeof renderSessionList==='function') renderSessionList();
-    showToast('Settings saved');
-    toggleSettings();
+    const saved=await api('/api/settings',{method:'POST',body:JSON.stringify(body)});
+    _applySavedSettingsUi(saved, body, {sendKey,showTokenUsage,showCliSessions,theme,language});
+    showToast(t('settings_saved'));
+    _hideSettingsPanel();
   }catch(e){
-    showToast('Save failed: '+e.message);
+    showToast(t('settings_save_failed')+e.message);
   }
 }
 
@@ -1080,29 +1348,30 @@ async function signOut(){
     await api('/api/auth/logout',{method:'POST',body:'{}'});
     window.location.href='/login';
   }catch(e){
-    showToast('Sign out failed: '+e.message);
+    showToast(t('sign_out_failed')+e.message);
   }
 }
 
 async function disableAuth(){
-  if(!confirm('Disable password protection? Anyone will be able to access this instance.')) return;
+  const _disAuth=await showConfirmDialog({title:t('disable_auth_confirm_title'),message:t('disable_auth_confirm_message'),confirmLabel:t('disable'),danger:true,focusCancel:true});
+  if(!_disAuth) return;
   try{
     await api('/api/settings',{method:'POST',body:JSON.stringify({_clear_password:true})});
-    showToast('Auth disabled — password protection removed');
+    showToast(t('auth_disabled'));
     // Hide both auth buttons since auth is now off
     const disableBtn=$('btnDisableAuth');
     if(disableBtn) disableBtn.style.display='none';
     const signOutBtn=$('btnSignOut');
     if(signOutBtn) signOutBtn.style.display='none';
   }catch(e){
-    showToast('Failed to disable auth: '+e.message);
+    showToast(t('disable_auth_failed')+e.message);
   }
 }
 
-// Close settings on overlay click (not panel click)
+// Close settings on overlay click (not panel click) -- with unsaved-changes check
 document.addEventListener('click',e=>{
   const overlay=$('settingsOverlay');
-  if(overlay&&e.target===overlay) toggleSettings();
+  if(overlay&&e.target===overlay) _closeSettingsPanel();
 });
 
 // ── Cron completion alerts ────────────────────────────────────────────────────
@@ -1119,8 +1388,7 @@ function startCronPolling(){
       const data=await api(`/api/crons/recent?since=${_cronPollSince}`);
       if(data.completions&&data.completions.length>0){
         for(const c of data.completions){
-          const icon=c.status==='error'?'\u274c':'\u2705';
-          showToast(`${icon} Cron "${c.name}" ${c.status==='error'?'failed':'completed'}`,4000);
+          showToast(t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed')),4000);
           _cronPollSince=Math.max(_cronPollSince,c.completed_at);
         }
         _cronUnreadCount+=data.completions.length;
@@ -1165,7 +1433,7 @@ const _backgroundErrors=[];  // {session_id, title, message, ts}
 function trackBackgroundError(sessionId, title, message){
   // Only track if user is NOT currently viewing this session
   if(S.session&&S.session.session_id===sessionId) return;
-  _backgroundErrors.push({session_id:sessionId, title:title||'Untitled', message, ts:Date.now()});
+  _backgroundErrors.push({session_id:sessionId, title:title||t('untitled'), message, ts:Date.now()});
   showErrorBanner();
 }
 
@@ -1182,7 +1450,8 @@ function showErrorBanner(){
   const latest=_backgroundErrors[0];  // FIFO: show oldest (first) error
   if(!latest){banner.style.display='none';return;}
   const count=_backgroundErrors.length;
-  banner.innerHTML=`<span>\u26a0 ${count>1?count+' sessions have':'"'+esc(latest.title)+'" has'} encountered an error</span><div style="display:flex;gap:6px;flex-shrink:0"><button class="reconnect-btn" onclick="navigateToErrorSession()">View</button><button class="reconnect-btn" onclick="dismissErrorBanner()">Dismiss</button></div>`;
+  const msg=count>1?t('bg_error_multi',count):t('bg_error_single',latest.title);
+  banner.innerHTML=`<span>\u26a0 ${esc(msg)}</span><div style="display:flex;gap:6px;flex-shrink:0"><button class="reconnect-btn" onclick="navigateToErrorSession()">${esc(t('view'))}</button><button class="reconnect-btn" onclick="dismissErrorBanner()">${esc(t('dismiss'))}</button></div>`;
   banner.style.display='';
 }
 
@@ -1201,76 +1470,4 @@ function dismissErrorBanner(){
   if(banner) banner.style.display='none';
 }
 
-// ── WhatsApp Sessions panel ─────────────────────────────────────────────────────
-
-async function loadWASessionsPanel() {
-  const panel = $('wasessionsPanel');
-  if (!panel) return;
-  try {
-    const data = await api('/api/wa-sessions');
-    renderWASessionsPanel(data.sessions || []);
-  } catch (e) {
-    panel.innerHTML = '<div style="color:var(--error);font-size:12px;padding:8px">Failed to load: ' + esc(e.message) + '</div>';
-  }
-}
-
-function renderWASessionsPanel(sessions) {
-  const panel = $('wasessionsPanel');
-  panel.innerHTML = '';
-
-  if (!sessions || sessions.length === 0) {
-    panel.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">No WhatsApp sessions yet. Send a message on WhatsApp to see it here.</div>';
-    return;
-  }
-
-  // Group consecutive user/assistant pairs into conversation cards
-  for (const entry of sessions) {
-    const isUser = entry.role === 'user';
-    const icon = isUser ? '&#128447;' : '&#128172;';
-    const bgColor = isUser ? 'rgba(124,185,255,.07)' : 'rgba(255,255,255,.03)';
-    const borderColor = isUser ? 'rgba(124,185,255,.2)' : 'rgba(255,255,255,.06)';
-    const label = isUser ? 'You (WA)' : 'ZenOps';
-    const handler = entry.handler || '';
-    const handlerLabel = handler ? '<span style="font-size:9px;background:var(--border2);padding:1px 5px;border-radius:4px;margin-left:6px;color:var(--muted)">' + esc(handler.replace('intent-', '')) + '</span>' : '';
-
-    const time = entry.ts ? new Date(entry.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '?';
-
-    const card = document.createElement('div');
-    card.style.cssText = 'margin-bottom:10px;border-radius:8px;border:1px solid ' + borderColor + ';background:' + bgColor + ';padding:8px 10px';
-
-    if (isUser) {
-      // User message: show text
-      card.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:11px;color:var(--accent)">' + icon + ' ' + label + '</span><span style="font-size:9px;color:var(--muted)">' + time + '</span>' + handlerLabel + '</div>';
-      const msgDiv = document.createElement('div');
-      msgDiv.style.cssText = 'font-size:12px;color:var(--text);line-height:1.5;word-break:break-word';
-      msgDiv.textContent = entry.text;
-      card.appendChild(msgDiv);
-
-      // Show assistant response if available
-      if (entry.response) {
-        const respDiv = document.createElement('div');
-        respDiv.style.cssText = 'margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.06);font-size:11px;color:var(--muted);line-height:1.5;white-space:pre-wrap;word-break:break-word';
-        respDiv.textContent = entry.response.length > 300 ? entry.response.substring(0, 300) + '...' : entry.response;
-        card.appendChild(respDiv);
-      }
-    } else {
-      // Assistant-only entry (e.g. zeroclaw response with no prior user log)
-      card.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:11px;color:var(--text)">' + icon + ' ' + label + '</span><span style="font-size:9px;color:var(--muted)">' + time + '</span><span style="font-size:9px;background:var(--border2);padding:1px 5px;border-radius:4px;color:var(--muted)">' + esc(handler) + '</span></div>';
-      const respDiv = document.createElement('div');
-      respDiv.style.cssText = 'font-size:11px;color:var(--muted);line-height:1.5;white-space:pre-wrap;word-break:break-word';
-      respDiv.textContent = (entry.text || '').length > 300 ? entry.text.substring(0, 300) + '...' : (entry.text || '');
-      if (entry.response && entry.response !== entry.text) {
-        respDiv.textContent += '\n' + (entry.response.length > 200 ? entry.response.substring(0, 200) + '...' : entry.response);
-      }
-      card.appendChild(respDiv);
-    }
-
-    panel.appendChild(card);
-  }
-
-  // Auto-refresh every 10s when panel is visible
-  if (window._waSessionsInterval) clearInterval(window._waSessionsInterval);
-  window._waSessionsInterval = setInterval(loadWASessionsPanel, 10000);
-}
-
-// ── Event wiring
+// Event wiring

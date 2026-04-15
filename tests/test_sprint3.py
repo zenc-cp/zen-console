@@ -1,7 +1,7 @@
 """Sprint 3 tests: cron API, skills API, memory API, input validation."""
 import json, uuid, urllib.request, urllib.error
 
-BASE = "http://127.0.0.1:8788"  # test server (isolated from production)
+from tests._pytest_port import BASE
 
 def get(path):
     with urllib.request.urlopen(BASE + path, timeout=10) as r:
@@ -114,6 +114,24 @@ def test_session_delete_requires_session_id():
     result, status = post("/api/session/delete", {})
     assert status == 400
 
+
+def test_session_delete_rejects_absolute_path_payload(tmp_path):
+    victim = tmp_path / "victim.json"
+    victim.write_text("TOPSECRET", encoding="utf-8")
+    result, status = post("/api/session/delete", {"session_id": str(victim.with_suffix(""))})
+    assert status == 400
+    assert victim.exists(), "absolute-path payload must not delete arbitrary files"
+
+
+def test_session_delete_rejects_traversal_payload(tmp_path):
+    victim = tmp_path / "outside.json"
+    victim.write_text("TOPSECRET", encoding="utf-8")
+    traversal = f"../../../../{victim.with_suffix('').as_posix().lstrip('/')}"
+    result, status = post("/api/session/delete", {"session_id": traversal})
+    assert status == 400
+    assert victim.exists(), "traversal payload must not delete arbitrary files"
+
+
 def test_chat_start_requires_session_id():
     result, status = post("/api/chat/start", {"message": "hello"})
     assert status == 400
@@ -126,6 +144,43 @@ def test_chat_start_requires_message(cleanup_test_sessions):
 def test_session_update_unknown_id_returns_404():
     result, status = post("/api/session/update", {"session_id": "nosuchsession", "model": "openai/gpt-5.4-mini"})
     assert status == 404
+
+
+def test_session_update_rejects_workspace_outside_trusted_root(tmp_path):
+    d, _ = post("/api/session/new", {})
+    sid = d["session"]["session_id"]
+    outside = tmp_path / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    result, status = post("/api/session/update", {"session_id": sid, "workspace": str(outside)})
+    assert status == 400
+    assert "outside" in result.get("error", "").lower()
+
+
+def test_chat_start_rejects_workspace_outside_trusted_root(tmp_path):
+    d, _ = post("/api/session/new", {})
+    sid = d["session"]["session_id"]
+    outside = tmp_path / "outside-chat"
+    outside.mkdir(parents=True, exist_ok=True)
+    result, status = post("/api/chat/start", {"session_id": sid, "message": "hello", "workspace": str(outside)})
+    assert status == 400
+    assert "outside" in result.get("error", "").lower()
+
+
+def test_workspace_add_rejects_path_outside_trusted_root(tmp_path):
+    outside = tmp_path / "outside-add"
+    outside.mkdir(parents=True, exist_ok=True)
+    result, status = post("/api/workspaces/add", {"path": str(outside), "name": "Outside"})
+    assert status == 400
+    assert "outside" in result.get("error", "").lower()
+
+
+def test_session_new_rejects_workspace_outside_trusted_root(tmp_path):
+    outside = tmp_path / "outside-new"
+    outside.mkdir(parents=True, exist_ok=True)
+    result, status = post("/api/session/new", {"workspace": str(outside)})
+    assert status == 400
+    assert "outside" in result.get("error", "").lower()
+
 
 def test_session_search_returns_matches(cleanup_test_sessions):
     sid, _ = make_session_tracked(cleanup_test_sessions)

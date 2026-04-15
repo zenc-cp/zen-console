@@ -3,8 +3,9 @@
 > Goal: Full 1:1 parity with the Hermes CLI experience via a clean dark web UI.
 > Everything you can do from the CLI terminal, you can do from this UI.
 >
-> Last updated: v0.29 (April 4, 2026)
-> Tests: 424 total (401 passing, 23 pre-existing failures)
+> Last updated: v0.50.44 (April 14, 2026) — 1195 tests, 1195 passing
+> Local delta: enabling password from Settings keeps the current browser signed in; the former Assistant Reply Language enhancement has been removed.
+> Tests: 1059 total (1059 passing, 0 failures)
 > Source: <repo>/
 
 ---
@@ -32,14 +33,50 @@
 | Sprint 13 | Alerts + polish | Cron completion alerts (polling + badge), background error banner, session duplicate, browser tab title | 221 |
 | Sprint 14 | Visual polish + workspace ops | Mermaid diagrams, message timestamps, file rename, folder create, session tags, session archive | 233 |
 | Sprint 15 | Session projects + code copy | Session projects/folders, code block copy button, tool card expand/collapse toggle | 237 |
-| Sprint 16 | Session sidebar visual polish | SVG action icons, overlay hover actions, pin indicator, project border, safe HTML rendering | 289 |
+| Sprint 16 | Session sidebar visual polish | SVG action icons, session action dropdown, pin indicator, project border, safe HTML rendering | 289 |
 | Sprint 17 | Workspace polish + slash commands + settings | Breadcrumb navigation, slash command autocomplete, send key setting (#26) | 318 |
 | Sprint 18 | Thinking display + workspace tree | File preview auto-close, thinking/reasoning cards, expandable directory tree (#22) | 318 |
 | Sprint 19 | Auth + security hardening | Password auth (off by default), login page, security headers, 20MB body limit (#23) | 328 |
 | Sprint 20 | Voice input + send button | Voice input (Web Speech API), send button icon-circle with pop-in animation | 415 |
-| Sprint 21 | Mobile responsive + Docker | Hamburger sidebar, bottom nav, files slide-over, Docker support (#21, #7) | 415 |
+| Sprint 21 | Mobile responsive + Docker | Hamburger sidebar, mobile nav, files slide-over, Docker support (#21, #7) | 415 |
 | Sprint 22 | Multi-profile support | Profile picker, management panel, seamless switching, per-session tracking (#28) | 415 |
 | Sprint 23 | Agentic transparency | Token/cost display, subagent cards, skill picker in cron, skill linked files, workspace tree persistence, timestamp fixes | 424 |
+| v0.44.0 patch | Fix batch: approval card, login CSP, update diagnostics, Lucide icons | PRs #221 #225 #226 #227 #228 | 579 |
+| v0.45.0 | Custom endpoint in new profile form | Base URL + API key fields; server-side URL validation; config.yaml merge; 9 new tests (PR #233, fixes #170) | 604 |
+| v0.46.0 | Security, Docker UID/GID, model discovery, i18n, cancel fix | Credential redaction in API responses (PR #243); Docker UID/GID matching (PR #237); custom model API key discovery (PR #238); HTML entity decode + zh/zh-Hant i18n (PR #239); cancel interrupts agent (PR #244); +20 tests | 624 |
+| v0.47.0 | Dialogs, session menu, skills command, mobile fixes, mobile QA | Shared app dialogs (#251); session ⋯ menu (#252); mobile QA suite (#254); custom provider slash routing fix (#255); Android Chrome mobile fixes (#256); /skills command (#257); +21 tests | 645 |
+| v0.47.1 | Spanish locale | Full Spanish (es) locale, 175 keys, key-parity tests (#275 @gabogabucho); +3 tests | 648 |
+| v0.48.0 | Gateway session sync | Real-time Telegram/Discord/Slack sessions in sidebar via SSE + DB polling (#274 @bergeouss); +10 tests | 658 |
+| v0.48.1 | Table inline formatting | `inlineMd()` in table cells — **bold**, *italic*, `code`, links render correctly (PR #278); 0 new tests | 658 |
+| v0.48.2 | Provider mismatch warning | Toast warning + auth_mismatch error type for provider/model mismatches (#283, fixes #266); +21 tests | 679 |
+| v0.49.1 | Docker docs + mobile Profiles button | Two-container Docker compose (#291/#288); Profiles added to the mobile navigation flow with correct panel wiring and SVG sizing (#297/#265 @gabogabucho); +3 tests | 700 |
+| v0.49.0 | First-run onboarding wizard + self-update hardening | One-shot bootstrap + guided setup wizard; provider config persisted to config.yaml + .env; OpenRouter/Anthropic/OpenAI/Custom; wizard hidden after completion (#285); self-update stderr/split-ref/conflict fixes (#287); skip flaky redaction test (#289); +18 tests | 697 |
+| v0.32 | Auto-compaction handling | Compression detection, /compact command, real context window indicator | 424 |
+| v0.33 | /insights sync | Opt-in state.db sync so `hermes /insights` includes WebUI sessions | 424 |
+| v0.34 | Sprint 26 — Pluggable themes | Dark, Light, Slate, Solarized, Monokai, Nord; settings unsaved-changes guard; /theme command | 433 |
+| v0.34.1 | Theme variable polish | 30+ hardcoded dark-navy colors replaced with theme-aware CSS variables | 433 |
+| v0.34.2 | Theme text colors | 5 new per-theme typography variables (--strong, --em, --code-text, --code-inline-bg, --pre-text) | 433 |
+| v0.34.3 | Light theme final polish | 46 light-scoped selector overrides for sidebar, roles, chips, interactive elements | 433 |
+| v0.35 | Security hardening | Env race fix, random signing key, upload path traversal, PBKDF2 password hash | 433 |
+| v0.36–v0.37 | Model routing, personality config, tool card reload, duplicate model fixes | Model routing by provider prefix, personality via config.yaml, tool cards reload on page refresh | 466 |
+| v0.38.0–v0.38.6 | Model selector, custom endpoints, OLED theme, reasoning display, insights sync | Custom endpoint URL fix, OLED theme, top-level reasoning field fix, message_count sync to state.db | 466 |
+| v0.39.0 | Security hardening (Sprint 29) | CSRF, PBKDF2, rate limiting, session ID validation, SSRF, ENV_LOCK, XSS, HMAC, skills traversal, secure cookie, error sanitization, startup warning | 499 |
+| v0.40–v0.44.2 | Approval card + Lucide icons + sprint auth | Approval prompt surfaced in UI, emoji icons → Lucide SVG, login CSP inline fix, update diagnostics | 579 |
+| v0.45–v0.46 | Custom endpoints + security + i18n + cancel | Custom endpoint Base URL + API key on profile create, credential redaction (PR #243), Docker UID/GID (PR #237), HTML entity decode + zh/zh-Hant i18n, cancel interrupts agent | 624 |
+| v0.47–v0.47.1 | Dialogs + session menu + skills + mobile QA + Spanish | Shared app dialogs, session ⋯ menu, /skills command, mobile QA suite, Android Chrome fixes, Spanish locale (@gabogabucho) | 648 |
+| v0.48–v0.48.2 | Gateway session sync + table formatting + provider warnings | Real-time Telegram/Discord/Slack sessions in sidebar (@bergeouss), inlineMd() in table cells, provider/model mismatch toast | 679 |
+| v0.49–v0.49.1 | Onboarding wizard + Docker two-container | One-shot bootstrap + guided setup wizard, OpenRouter/Anthropic/OpenAI/Custom provider config, two-container Docker compose, mobile Profiles button | 700 |
+| v0.50.0 | v0.50.0 UI overhaul (Sprint 34) | Composer-centric controls, Hermes Control Center modal, workspace panel state machine, collapsible date groups, rAF streaming throttle, context ring indicator (@aronprins) | 742 |
+| v0.50.5–v0.50.10 | Think-tag edge cases + onboarding hardening + mobile fixes | MiniMax M2.5 leading-whitespace think-tag fix, skip-onboarding env var, OAuth provider path, Docker bridge networks fix, model dropdown dedup, title auto-generation fix, mobile close button | 802 |
+| v0.50.11–v0.50.12 | Chat table styles + URL autolink + profile env isolation | .msg-body table borders, plain URL auto-linking, profile .env secret isolation on switch (prevents API key leakage across profiles, @Hinotoi-agent) | 815 |
+| v0.50.13–v0.50.15 | session_search + security sweep + KaTeX math | SessionDB injection for session_search in WebUI (@DelightRun), bandit B310/B324/B110 + QuietHTTPServer (@lawrencel1ng), KaTeX math rendering with fence-before-math fix | 871 |
+| v0.50.16–v0.50.17 | CSRF reverse proxy + Docker uv pre-install | Scheme-aware CSRF port normalization for non-standard ports (@lx3133584), Docker uv pre-installed at build time as root (fixes air-gapped startup, @mmartial-pattern) | 900 |
+| v0.50.18–v0.50.19 | Workspace fallback + Unicode filenames | Cascading workspace path recovery (@Jordan-SkyLF), Unicode Content-Disposition headers with RFC 5987 filename* (@shaoxianbilly), silent auth error surfacing, stale model cleanup | 924 |
+| v0.50.20–v0.50.21 | Silent errors + live model fetching + durable streaming recovery | apperror on empty agent response, /api/models/live endpoint with SSRF guard, live reasoning cards, tool_complete SSE events, SESSION_QUEUES, localStorage reload recovery (@Jordan-SkyLF) | 961 |
+| v0.50.22–v0.50.36-local.1 | Upstream sync + minimal local patch retention | Synced to upstream `v0.50.36`; retained first-password session continuity in Settings/onboarding; removed local Assistant Reply Language enhancement; added legacy settings cleanup regression coverage | 1059 |
+| v0.50.37–v0.50.40 | Sprint 40 — rendering fixes + KaTeX CSP + MEDIA images | Think-tag edge cases, renderMd link double-linking fix, MEDIA: inline image rendering, KaTeX CSP font-src fix | 1117 |
+| v0.50.41–v0.50.43 | Sprint 41/42 — context ring, session polish, renderMd hardening | Context indicator live usage, session display fixes, renderMd bold+code stash, outer link pass ordering, _ob_stash, autolink double-link fixes (@multiple contributors) | 1150 |
+| v0.50.44 | Renderer formatting bug fixes (#486, #487) | CSS: inline code sizing in table cells; JS: markdown image syntax ![alt](url) → <img> in renderMd + inlineMd; _img_stash for autolink protection | 1195 |
 
 ---
 
@@ -47,14 +84,14 @@
 
 | Layer | Location | Status |
 |-------|----------|--------|
-| Python server | <repo>/server.py (~81 lines) + api/ modules (~3210 lines) | Thin shell + auth middleware + business logic in api/ |
-| HTML template | <repo>/static/index.html (~364 lines) | Served from disk |
-| CSS | <repo>/static/style.css (~670 lines) | Served from disk, incl. mobile responsive |
-| JavaScript | <repo>/static/{ui,workspace,sessions,messages,panels,boot,commands}.js | 7 modules, ~3610 lines total |
+| Python server | <repo>/server.py (~165 lines) + api/ modules (~5000 lines) | Thin shell + QuietHTTPServer + auth middleware + business logic in api/ |
+| HTML template | <repo>/static/index.html (~600 lines) | Served from disk |
+| CSS | <repo>/static/style.css (~1050 lines) | Served from disk, incl. mobile responsive, KaTeX, table styles |
+| JavaScript | <repo>/static/{ui,workspace,sessions,messages,panels,boot,commands,icons,i18n,login}.js | 10 modules, ~7100 lines total |
 | Docker | Dockerfile, docker-compose.yml, .dockerignore | python:3.12-slim, multi-arch (amd64+arm64) |
 | CI/CD | .github/workflows/release.yml | Auto-release + GHCR publish on tag push |
 | Runtime state | ~/.hermes/webui-mvp/sessions/ | Session JSON files |
-| Test server | Port 8788, state dir ~/.hermes/webui-mvp-test/ | Isolated, wiped per run |
+| Test server | Port 8788 (conftest.py), port 8789 (browser sanity) | Isolated, wiped per run |
 | Production server | Port 8787 | SSH tunnel from Mac |
 
 ---
@@ -64,11 +101,12 @@
 ### Chat and Agent
 - [x] Send messages, get SSE-streaming responses
 - [x] Switch models per session (10 models, grouped by provider)
+- [x] Composer-scoped model picker in footer (moved from sidebar to align with per-conversation model selection)
 - [x] Multi-provider API support: use any Hermes agent API provider (OpenAI, Anthropic, Google, etc.) directly, not just OpenRouter (Sprint 11)
 - [x] Custom endpoint model discovery: auto-detect models from Ollama, LM Studio, and other local LLM servers via base_url (PR #18)
 - [x] Upload files to workspace (drag-drop, click, clipboard paste)
 - [x] File tray with remove button
-- [x] Tool progress shown in activity bar above composer
+- [x] Tool progress shown inline in the conversation via live tool cards
 - [x] Approval card for dangerous commands (Allow once/session/always, Deny)
 - [x] Approval polling + SSE-pushed approval events
 - [x] INFLIGHT guard: switch sessions mid-request without losing response
@@ -80,23 +118,25 @@
 - [x] Token/cost estimate per message (Sprint 23)
 
 ### Tool Visibility
-- [x] Tool progress in activity bar (moved out of composer footer)
+- [x] Tool progress in live tool cards (kept out of the composer/footer chrome)
 - [x] Approval card with all 4 choices
 - [x] Tool call cards inline (collapsed, show name/args/result)
 
 ### Workspace / Files
+- [x] Workspace panel defaults closed and opens only for active browsing or preview
 - [x] Browse workspace directory tree with type icons
 - [x] Preview text/code files (read-only)
 - [x] Preview markdown files (rendered, tables supported)
 - [x] Preview image files (PNG, JPG, GIF, SVG, WEBP inline)
 - [x] Edit files inline (Edit button, Enter to save, Escape to cancel)
 - [x] Create new file (+ button in panel header)
-- [x] Delete file (hover trash, confirm dialog)
+- [x] Delete file (hover trash, confirmation modal)
 - [x] File name truncation with tooltip for long names
 - [x] Right panel resizable (drag inner edge)
 - [x] Syntax highlighted code preview (Prism.js)
 - [x] Rename file (Sprint 14)
 - [x] Create folder (Sprint 14)
+- [x] Shared app modal for confirm/input flows (Sprint 33)
 
 ### Sessions
 - [x] Create session (+ button or Cmd/Ctrl+K)
@@ -186,17 +226,28 @@
 - [x] Voice input via Web Speech API (Sprint 20)
 
 ### Mobile
-- [x] Mobile responsive layout — hamburger sidebar, bottom nav, files slide-over (Sprint 21)
+- [x] Mobile responsive layout — hamburger sidebar, sidebar tabs on phones, files slide-over (Sprint 21 + later mobile nav simplification)
 
 ### Profiles
 - [x] Multi-profile support — create, switch, delete profiles (Sprint 22, Issue #28)
 
 ### Advanced / Future
+- [ ] Subagent session tree -- show subagent hierarchy in sidebar with expand/collapse (PR #75)
+- [ ] Specialized tool card renderers -- diff viewer, terminal output, todo checklist views (PR #75)
+- [x] Streaming performance -- rAF-throttled token rendering (Sprint 24, PR #81)
+- [x] Workspace git detection -- branch name and dirty status badge (Sprint 24, PR #82)
+- [x] Collapsible date groups -- click group headers to collapse (Sprint 24, PR #80)
+- [x] Context usage indicator -- compact circular badge in composer footer (Sprint 24, PR #83; refreshed April 10, 2026)
+- [ ] LLM-generated session titles -- auto-title via small model instead of first-message substring (PR #75)
+- [ ] Workspace git detection -- show branch name, dirty status in workspace header (PR #75)
+- [ ] Clarify dialog -- agent can ask clarifying questions that block until user responds (PR #75)
+- [ ] Gateway approval polling -- support blocking approvals from messaging gateway (PR #75)
+- [ ] Unified session storage -- SessionDB shared between webui and CLI (PR #75)
 - [ ] TTS playback of responses (deferred)
-- [ ] Subagent delegation cards (deferred)
-- [x] Background task cancel (activity bar Cancel button)
+- [x] Background task cancel (composer footer stop button)
 - [ ] Code execution cell (deferred)
-- [ ] Desktop application (deferred)
+- [ ] Desktop application (Sprint 25, PLANNED)
+- [x] Pluggable UI themes -- Dark, Light, Slate, Solarized, Monokai, Nord (Sprint 26, v0.34)
 - [ ] Extended slash command / skill integration (deferred)
 - [ ] Virtual scroll for large lists (deferred)
 

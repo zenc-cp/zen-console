@@ -1,32 +1,46 @@
 # Hermes Web UI -- Forward Sprint Plan
 
-> Current state: v0.30.1 | 424 tests | Daily driver ready
-> This document plans the path from here to two targets:
+> Current state: v0.50.21 | 961 tests | Full daily driver — CLI parity achieved
 >
-> Target A: 1:1 feature parity with the Hermes CLI (everything you can do from the
->           terminal, you can do from the browser)
+> NOTE: Most planned work in this document has now shipped. This file is preserved
+> as a historical planning record. Current sprint state and version history live
+> in CHANGELOG.md and ROADMAP.md.
 >
-> Target B: 1:1 parity with Claude's reproducible features (the full Claude
->           browser UI experience, minus things only Anthropic can build)
+> Target A (CLI parity): ✅ Complete — all core tools, workspace, cron, skills,
+>           memory, sessions, profiles, model routing, streaming, voice, mobile.
 >
-> Sprints are ordered by impact. Each builds on the one before.
-> Past sprint history lives in CHANGELOG.md.
+> Target B (Claude parity): ~90% — thinking display, math rendering (KaTeX),
+>           tool cards, workspace preview, onboarding, settings panel all done.
+>           Remaining: full subagent transparency UI, file diff viewer.
+>
+> Last meaningful update: v0.50.21 (April 13, 2026). See CHANGELOG.md for full history.
 
 ---
 
-## Where we are now (v0.21)
+## Where we are now (v0.50.21 — updated April 2026)
 
-**CLI parity: ~90% complete.** Core agent loop, all tools visible, workspace
-file ops with tree view, cron/skills/memory CRUD, session management, streaming,
-cancel, multi-provider models, custom endpoint discovery, slash commands,
-thinking/reasoning display, password auth -- all solid. Gaps are subagent
-visibility, toolset control, and code execution.
+> The sections below describe the state as of v0.36 for historical reference.
+> See ROADMAP.md for the current sprint history table (v0.36 → v0.50.21).
 
-**Claude parity: ~70% complete.** Chat, streaming, file browser, session
-management, tool cards, syntax highlighting, model switching, projects,
-settings, Mermaid diagrams, mobile layout, breadcrumb workspace nav, slash
-commands, thinking display, auth -- all present. Gaps are artifacts, voice,
-TTS, sharing, mobile-optimized layout.
+**CLI parity: ✅ Complete** as of v0.50.x. Core agent loop, all tools visible, workspace
+file ops with tree view and git detection, cron/skills/memory CRUD, session
+management, streaming with rAF throttle, cancel, multi-provider models, custom
+endpoint discovery, slash commands (help/clear/model/workspace/new/usage/theme/compact),
+thinking/reasoning display, password auth, multi-profile support with seamless
+switching, CLI session bridge (read and import from state.db), context
+auto-compaction handling, self-update checker. Remaining gaps: subagent
+session tree, toolset control per session, code execution cells.
+
+**Claude parity: ~85% complete.** Chat, streaming, file browser, session
+management with projects and tags, tool cards with subagent delegation,
+syntax highlighting, model switching, Mermaid diagrams, mobile responsive
+layout (hamburger sidebar, bottom nav, files slide-over), breadcrumb
+workspace nav with tree view, slash commands, thinking/reasoning display,
+auth with signed cookies, 6 pluggable UI themes (dark/light/slate/solarized/
+monokai/nord), voice input (Web Speech API), collapsible date groups,
+context usage indicator, token/cost display, git branch badge, Docker
+support. Remaining gaps: artifacts (HTML/SVG preview), TTS playback,
+sharing/public URLs, code execution inline.
 
 ---
 
@@ -75,7 +89,7 @@ heavy agentic work.
 
 ---
 
-## Sprint 12 -- Settings Panel + Reliability + Session QoL
+## Sprint 12 -- Settings Panel + Reliability + Session QoL (COMPLETED)
 
 **Theme:** Persist your preferences, survive network blips, and organize sessions.
 
@@ -118,7 +132,7 @@ to keep important conversations accessible.
 
 ---
 
-## Sprint 13 -- Alerts, Session QoL, Polish
+## Sprint 13 -- Alerts, Session QoL, Polish (COMPLETED)
 
 **Theme:** Know what Hermes is doing, and small quality-of-life wins.
 
@@ -248,7 +262,7 @@ inconsistently across platforms. These were the most common visual complaints.
   button now only appears in the hover overlay like all other actions.
 
 ### Track B: Features
-- **SVG action icons.** Replaced all emoji HTML entities (★, 📂, 📦, ⊕, 🗑)
+- **SVG action icons.** Replaced old symbol and emoji HTML entities
   with monochrome SVG line icons that inherit `currentColor`. Consistent
   rendering across macOS, Linux, and Windows. Icons: pin (star), folder,
   archive (box), duplicate (overlapping squares), trash (bin with lines).
@@ -511,15 +525,14 @@ single default profile, blocking multi-persona workflows.
 
 ---
 
-## Sprint 23 -- Profile/Workspace/Model Coherence (COMPLETED)
+## Sprint 23 -- Agentic Transparency + Context Visibility (COMPLETED)
 
-**Theme:** Make profiles, workspaces, models, and sessions coherent across
-profile switches.
+**Theme:** Surface what the agent is doing and how much context it's using.
 
-**Why now:** Sprint 22 added profile switching but five coherence bugs remained:
-the model picker ignored the profile's default, workspaces were a global file,
-DEFAULT_WORKSPACE was a startup singleton, the session list showed all profiles,
-and switchToProfile() didn't refresh workspaces or sessions.
+**Why now:** Users had no visibility into tool call arguments, session token
+usage, or context window fill. Sprint 22 left five coherence bugs in the
+profile/workspace/model flow that also needed closing before the UI felt
+reliable.
 
 ### Track A: Bugs
 - **Model picker ignores profile on switch.** `populateModelDropdown()` skipped
@@ -611,12 +624,9 @@ the app to others.
   CSS `contain: strict` + IntersectionObserver approach, no library needed.
 
 ### Track C: Code Quality
-- **SPRINTS.md + ROADMAP.md + CHANGELOG.md updated** to reflect Sprint 23
-  completion (agentic transparency) and correct test counts.
-- **Remove stale Sprint 23 description** from SPRINTS.md (the "Profile/Workspace
-  coherence" text is from an older plan; Sprint 23 actually shipped agentic
-  transparency features).
-- **CHANGELOG entry for v0.29** covering Sprint 23 deliverables.
+- Audit and remove any remaining dead code introduced by Sprint 23 (e.g. `S.lastUsage` assignment in messages.js that nothing reads).
+- Verify tool call args render correctly in settled history cards on session reload.
+- Update test count in all docs to match actual pytest output after sprint merges.
 
 **Estimated tests:** ~10 new. Target total: ~435.
 **Hermes CLI parity impact:** Low
@@ -758,7 +768,7 @@ Both architectures in one .app. No separate downloads needed.
 - JS bridge fires when approval card appears/disappears
 
 **Menu bar mode (optional, v2):**
-- A small status bar item (⚗️ icon in menu bar) that opens a compact popover
+- A small status bar item (beaker icon in menu bar) that opens a compact popover
 - Popover shows current session status, last message, quick-compose field
 - Useful for running Hermes in the background without a full window
 
@@ -897,6 +907,270 @@ genuinely differentiating for an open-source project
 
 ---
 
-*Last updated: April 4, 2026*
-*Current version: v0.30.1 | 424 tests*
+## Sprint 26 -- Pluggable UI Themes (COMPLETED)
+
+**Theme:** Let users choose how the app looks -- light, dark, and custom color
+schemes. One-click switching, persistent preference, zero flicker on load.
+
+**Difficulty: Low-Medium.** The existing CSS is already 100% CSS-variable-driven
+off a single `:root` block. Every color, background, and accent in the entire UI
+is already a variable. Adding themes is mostly a matter of defining alternative
+`:root` overrides and wiring a picker -- not a rewrite. The main engineering
+work is flicker prevention on load and the settings UI.
+
+**Estimated effort:** 1 sprint, ~2 days of implementation. 8-12 new tests.
+
+---
+
+### Why now
+
+The UI ships only one dark theme. Contributors have asked for light mode. Power
+users want to match their terminal colorscheme. This is low-risk, high-value
+polish that makes the app feel more finished and more personal. It's also a
+good precedent-setter: once the theme system exists, community members can
+contribute new themes as a pure CSS addition with no Python changes needed.
+
+---
+
+### Design decisions
+
+**Themes are CSS-variable overrides, not separate stylesheets.** Each theme is
+a named `:root[data-theme="name"]` block. The base stylesheet stays untouched.
+Switching themes sets `document.documentElement.dataset.theme = name` in JS.
+No FOUC (flash of unstyled content), no stylesheet swap latency.
+
+**Theme preference persists server-side in `settings.json`.** Same mechanism
+as `send_key` and `show_token_usage`. The server includes `theme` in the
+`GET /api/settings` response. Boot.js reads it and applies before first paint.
+
+**Flicker prevention.** A tiny inline `<script>` in `<head>` (before the
+stylesheet link) reads `localStorage.getItem('hermes-theme')` and sets
+`document.documentElement.dataset.theme` synchronously. This prevents a
+dark-flash on light-mode users during the round-trip to `/api/settings`.
+The localStorage value is kept in sync whenever the user changes themes.
+
+**No third-party dependencies.** Pure CSS + vanilla JS. No theme library.
+
+---
+
+### Track A: Core theme system
+
+**1. CSS variable blocks in `static/style.css`**
+
+The existing `:root` block becomes the `dark` (default) theme. Add named
+theme blocks immediately after:
+
+```css
+/* ── Default (dark) theme ── already in :root ── */
+
+:root[data-theme="light"] {
+  --bg: #f5f5f7;
+  --sidebar: #e8e8ed;
+  --border: rgba(0,0,0,0.10);
+  --border2: rgba(0,0,0,0.16);
+  --text: #1c1c1e;
+  --muted: #6e6e80;
+  --accent: #c0392b;
+  --blue: #0a6dc2;
+  --gold: #a07a20;
+  --code-bg: #f0f0f5;
+}
+
+:root[data-theme="solarized"] {
+  --bg: #002b36;
+  --sidebar: #073642;
+  --border: rgba(255,255,255,0.08);
+  --border2: rgba(255,255,255,0.13);
+  --text: #839496;
+  --muted: #657b83;
+  --accent: #dc322f;
+  --blue: #268bd2;
+  --gold: #b58900;
+  --code-bg: #073642;
+}
+
+:root[data-theme="monokai"] {
+  --bg: #272822;
+  --sidebar: #1e1f1c;
+  --border: rgba(255,255,255,0.07);
+  --border2: rgba(255,255,255,0.12);
+  --text: #f8f8f2;
+  --muted: #75715e;
+  --accent: #f92672;
+  --blue: #66d9e8;
+  --gold: #e6db74;
+  --code-bg: #1e1f1c;
+}
+
+:root[data-theme="nord"] {
+  --bg: #2e3440;
+  --sidebar: #272c36;
+  --border: rgba(255,255,255,0.07);
+  --border2: rgba(255,255,255,0.12);
+  --text: #eceff4;
+  --muted: #9099aa;
+  --accent: #bf616a;
+  --blue: #81a1c1;
+  --gold: #ebcb8b;
+  --code-bg: #272c36;
+}
+```
+
+Additional theming notes:
+- `syntax-highlight` colors (Prism.js) are theme-independent (they come from the
+  CDN stylesheet) -- acceptable for v1.
+- The logo gradient (`linear-gradient(145deg,#e8a030,var(--accent))`) uses
+  `--accent` already so it adapts automatically.
+- Scrollbar colors and `::selection` backgrounds need explicit overrides in the
+  light theme to avoid dark scrollbars on a light background.
+
+**2. Flicker-prevention inline script in `static/index.html`**
+
+Immediately after `<head>` opens, before the stylesheet `<link>`:
+
+```html
+<script>
+(function(){
+  var t=localStorage.getItem('hermes-theme');
+  if(t && t!=='dark') document.documentElement.dataset.theme=t;
+})();
+</script>
+```
+
+This runs synchronously before the stylesheet parses. Zero flicker.
+
+**3. Theme loading in `static/boot.js`**
+
+In the existing `api('/api/settings')` call, read and apply the theme:
+
+```js
+const s = await api('/api/settings');
+window._sendKey = s.send_key || 'enter';
+window._showTokenUsage = !!s.show_token_usage;
+window._showCliSessions = !!s.show_cli_sessions;
+// Theme: apply server preference, update localStorage for flicker prevention
+const theme = s.theme || 'dark';
+document.documentElement.dataset.theme = theme;
+localStorage.setItem('hermes-theme', theme);
+```
+
+**4. Theme setting in `api/config.py`**
+
+```python
+_SETTINGS_DEFAULTS = {
+    ...
+    'theme': 'dark',  # active UI theme name
+    ...
+}
+_SETTINGS_ALLOWED_KEYS = set(_SETTINGS_DEFAULTS.keys()) - {'password_hash'}
+```
+
+No enum constraint on `theme` -- allows user-defined theme names to work
+without server changes.
+
+---
+
+### Track B: Theme picker UI
+
+**Settings panel addition (`static/index.html` + `static/panels.js`)**
+
+A `<select>` in the Settings panel, below the send-key picker:
+
+```html
+<div class="settings-field">
+  <label for="settingsTheme">Theme</label>
+  <select id="settingsTheme" ...>
+    <option value="dark">Dark (default)</option>
+    <option value="light">Light</option>
+    <option value="solarized">Solarized Dark</option>
+    <option value="monokai">Monokai</option>
+    <option value="nord">Nord</option>
+  </select>
+</div>
+```
+
+In `loadSettingsPanel()`:
+```js
+const themeSel = $('settingsTheme');
+if(themeSel) themeSel.value = settings.theme || 'dark';
+```
+
+In `saveSettings()`:
+```js
+body.theme = $('settingsTheme').value;
+```
+
+**Live preview on select change (no save required):**
+```js
+$('settingsTheme').addEventListener('change', e => {
+  document.documentElement.dataset.theme = e.target.value;
+  localStorage.setItem('hermes-theme', e.target.value);
+});
+```
+
+This gives instant visual feedback as the user clicks through options.
+The full settings save then persists it server-side.
+
+**`/theme` slash command (`static/commands.js`)**
+
+```js
+async function cmdTheme(arg) {
+  const themes = ['dark','light','solarized','monokai','nord'];
+  if(!arg || !themes.includes(arg)) {
+    showToast('Usage: /theme dark|light|solarized|monokai|nord');
+    return;
+  }
+  document.documentElement.dataset.theme = arg;
+  localStorage.setItem('hermes-theme', arg);
+  try { await api('/api/settings', {method:'POST', body: JSON.stringify({theme: arg})}); } catch(e) {}
+  showToast('Theme: ' + arg);
+}
+```
+
+---
+
+### Track C: Tests
+
+New test cases in `tests/test_sprint26.py`:
+
+1. `GET /api/settings` returns `theme: 'dark'` by default
+2. `POST /api/settings` with `{theme: 'light'}` persists and round-trips
+3. `POST /api/settings` with `{theme: 'nord'}` accepts any string (no enum gate)
+4. Theme value survives server restart (reads from `settings.json`)
+5. `/theme` command fires without error for each named theme
+6. `loadSettingsPanel()` populates the select with the current theme value
+7. Settings save includes theme in the POST body
+8. `data-theme` attribute is set on `<html>` before first paint (inline script)
+
+**Estimated new tests:** 8. Target total after sprint: ~443.
+
+---
+
+### What's out of scope
+
+- **Custom color editors** (hex pickers for each variable): saves that for v2.
+  The five shipped themes cover the main use cases. A custom theme can always
+  be added by dropping a CSS block with no code changes.
+- **Per-session themes**: single global preference is the right call for v1.
+- **System `prefers-color-scheme` sync**: nice-to-have, low priority. The
+  flicker-prevention script could be extended to read the media query if no
+  explicit preference is set.
+- **Prism.js theme switching**: the code-block syntax highlighting comes from
+  a CDN stylesheet. Swapping it requires a `<link>` swap and SRI re-check.
+  Defer to a future sprint; the default Prism Tomorrow theme works on all
+  current dark themes and is acceptable on light.
+
+---
+
+**Estimated tests:** 8 new. Target total: ~443.
+**Hermes CLI parity impact:** None
+**Claude parity impact:** Medium (Claude.ai has light/dark/system sync)
+**User-facing value:** High -- first thing many users ask for
+
+---
+
+*Last updated: April 12, 2026*
+*Current version: v0.49.1 | 700 tests*
 *Next sprint: Sprint 24 (Web Polish + Bug Fix Pass)*
+*Horizon sprint: Sprint 25 (macOS Desktop Application)*
+*Docs sweep policy: update markdown proactively during PR reviews and after significant releases*

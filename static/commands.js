@@ -3,19 +3,16 @@
 // (no round-trip to the agent) and shows feedback via toast or local message.
 
 const COMMANDS=[
-  {name:'help',      desc:'List available commands',             fn:cmdHelp},
-  {name:'clear',     desc:'Clear conversation messages',         fn:cmdClear},
-  {name:'model',     desc:'Switch model (e.g. /model gpt-4o)',  fn:cmdModel,     arg:'model_name'},
-  {name:'workspace', desc:'Switch workspace by name',            fn:cmdWorkspace, arg:'name'},
-  {name:'new',       desc:'Start a new chat session',            fn:cmdNew},
-  {name:'usage',     desc:'Toggle token usage display on/off',   fn:cmdUsage},
-  // P6: ZenOps quick commands
-  {name:'zenops',    desc:'ZenOps ops: status|deploy|log|restart', fn:cmdZenops, arg:'subcommand'},
-  {name:'hunter',    desc:'Delegate to Hunter agent',            fn:cmdHunter,    arg:'task'},
-  {name:'trader',    desc:'Check Trader status or signal',       fn:cmdTrader,    arg:'args'},
-  {name:'sentinel',   desc:'Check Sentinel scan status',        fn:cmdSentinel,   arg:'args'},
-  {name:'scribe',    desc:'Delegate to Scribe agent',            fn:cmdScribe,     arg:'task'},
-  {name:'branch',    desc:'Branch conversation to compare A vs B', fn:cmdBranch},
+  {name:'help',      desc:t('cmd_help'),             fn:cmdHelp},
+  {name:'clear',     desc:t('cmd_clear'),         fn:cmdClear},
+  {name:'compact',   desc:t('cmd_compact'),       fn:cmdCompact},
+  {name:'model',     desc:t('cmd_model'),  fn:cmdModel,     arg:'model_name'},
+  {name:'workspace', desc:t('cmd_workspace'),            fn:cmdWorkspace, arg:'name'},
+  {name:'new',       desc:t('cmd_new'),            fn:cmdNew},
+  {name:'usage',     desc:t('cmd_usage'),   fn:cmdUsage},
+  {name:'theme',     desc:t('cmd_theme'), fn:cmdTheme, arg:'name'},
+  {name:'personality', desc:t('cmd_personality'), fn:cmdPersonality, arg:'name'},
+  {name:'skills', desc:t('cmd_skills'), fn:cmdSkills, arg:'query'},
 ];
 
 function parseCommand(text){
@@ -47,10 +44,10 @@ function cmdHelp(){
     const usage=c.arg?` <${c.arg}>`:'';
     return `  /${c.name}${usage} — ${c.desc}`;
   });
-  const msg={role:'assistant',content:'**Available commands:**\n'+lines.join('\n')};
+  const msg={role:'assistant',content:t('available_commands')+'\n'+lines.join('\n')};
   S.messages.push(msg);
   renderMessages();
-  showToast('Type / to see commands');
+  showToast(t('type_slash'));
 }
 
 function cmdClear(){
@@ -59,11 +56,11 @@ function cmdClear(){
   clearLiveToolCards();
   renderMessages();
   $('emptyState').style.display='';
-  showToast('Conversation cleared');
+  showToast(t('conversation_cleared'));
 }
 
 async function cmdModel(args){
-  if(!args){showToast('Usage: /model <name>');return;}
+  if(!args){showToast(t('model_usage'));return;}
   const sel=$('modelSelect');
   if(!sel)return;
   const q=args.toLowerCase();
@@ -74,36 +71,40 @@ async function cmdModel(args){
       match=opt.value;break;
     }
   }
-  if(!match){showToast(`No model matching "${args}"`);return;}
+  if(!match){showToast(t('no_model_match')+`"${args}"`);return;}
   sel.value=match;
   await sel.onchange();
-  showToast(`Switched to ${match}`);
+  showToast(t('switched_to')+match);
 }
 
 async function cmdWorkspace(args){
-  if(!args){showToast('Usage: /workspace <name>');return;}
+  if(!args){showToast(t('workspace_usage'));return;}
   try{
     const data=await api('/api/workspaces');
     const q=args.toLowerCase();
     const ws=(data.workspaces||[]).find(w=>
       (w.name||'').toLowerCase().includes(q)||w.path.toLowerCase().includes(q)
     );
-    if(!ws){showToast(`No workspace matching "${args}"`);return;}
-    if(!S.session)return;
-    await api('/api/session/update',{method:'POST',body:JSON.stringify({
-      session_id:S.session.session_id,workspace:ws.path,model:S.session.model
-    })});
-    S.session.workspace=ws.path;
-    syncTopbar();await loadDir('.');
-    showToast(`Switched to workspace: ${ws.name||ws.path}`);
-  }catch(e){showToast('Workspace switch failed: '+e.message);}
+    if(!ws){showToast(t('no_workspace_match')+`"${args}"`);return;}
+    if(typeof switchToWorkspace==='function') await switchToWorkspace(ws.path, ws.name||ws.path);
+    else showToast(t('switched_workspace')+(ws.name||ws.path));
+  }catch(e){showToast(t('workspace_switch_failed')+e.message);}
 }
 
 async function cmdNew(){
   await newSession();
   await renderSessionList();
   $('msg').focus();
-  showToast('New session created');
+  showToast(t('new_session'));
+}
+
+function cmdCompact(){
+  // Send as a regular message to the agent -- the agent's run_conversation
+  // preflight will detect the high token count and trigger _compress_context.
+  // We send a user message so it appears in the conversation.
+  $('msg').value='Please compress and summarize the conversation context to free up space.';
+  send();
+  showToast(t('compressing'));
 }
 
 async function cmdUsage(){
@@ -116,133 +117,96 @@ async function cmdUsage(){
   const cb=$('settingsShowTokenUsage');
   if(cb) cb.checked=next;
   renderMessages();
-  showToast('Token usage '+(next?'on':'off'));
+  showToast(next?t('token_usage_on'):t('token_usage_off'));
 }
 
-// ── P6: ZenOps quick commands ───────────────────────────────────────────────
-
-async function cmdZenops(args){
-  const sub=(args||'').trim().toLowerCase();
-  setStatus('Running /zenops '+sub+'...');
-  let result, ok=false;
-  try{
-    const data=await api('/api/zenops/exec',{
-      method:'POST',
-      body:JSON.stringify({cmd:sub,args:args})
-    });
-    result=data.result||JSON.stringify(data);
-    ok=data.ok;
-  }catch(e){
-    result='Error: '+e.message;
+async function cmdTheme(args){
+  const themes=['dark','light','slate','solarized','monokai','nord','oled'];
+  if(!args||!themes.includes(args.toLowerCase())){
+    showToast(t('theme_usage')+themes.join('|'));
+    return;
   }
-  setStatus('');
-  const icon=ok?'✅':'❌';
-  S.messages.push({role:'assistant',content:`**${icon} /zenops ${sub}**\n\`\`\`\n${result.slice(0,2000)}\n\`\`\`\n`});
-  renderMessages();
-  showToast('/zenops '+(ok?'completed':'failed'));
+  const themeName=args.toLowerCase();
+  document.documentElement.dataset.theme=themeName;
+  localStorage.setItem('hermes-theme',themeName);
+  try{await api('/api/settings',{method:'POST',body:JSON.stringify({theme:themeName})});}catch(e){}
+  // Update settings dropdown if panel is open
+  const sel=$('settingsTheme');
+  if(sel)sel.value=themeName;
+  showToast(t('theme_set')+themeName);
 }
 
-async function cmdHunter(args){
-  if(!args.trim()){showToast('Usage: /hunter <task>');return;}
-  setStatus('Delegating to Hunter...');
+async function cmdSkills(args){
   try{
-    const data=await api('/api/zenops/exec',{
-      method:'POST',
-      body:JSON.stringify({cmd:'hunter',args})
-    });
-    const icon=data.ok?'✅':'❌';
-    S.messages.push({role:'assistant',content:`**${icon} Hunter**\n\`\`\`\n${(data.result||'').slice(0,2000)}\n\`\`\`\n`});
-    renderMessages();
-    showToast(data.ok?'Delegated to Hunter':'Hunter error');
-  }catch(e){
-    S.messages.push({role:'assistant',content:`**❌ Hunter delegation failed:** ${e.message}`});
-    renderMessages();
-  }
-  setStatus('');
-}
-
-async function cmdTrader(args){
-  setStatus('Checking Trader...');
-  try{
-    const data=await api('/api/zenops/exec',{
-      method:'POST',
-      body:JSON.stringify({cmd:'trader',args})
-    });
-    const icon=data.ok?'✅':'❌';
-    S.messages.push({role:'assistant',content:`**${icon} Trader**\n\`\`\`\n${(data.result||'').slice(0,2000)}\n\`\`\`\n`});
-    renderMessages();
-    showToast(data.ok?'Trader status retrieved':'Trader error');
-  }catch(e){
-    S.messages.push({role:'assistant',content:`**❌ Trader check failed:** ${e.message}`});
-    renderMessages();
-  }
-  setStatus('');
-}
-
-async function cmdSentinel(args){
-  setStatus('Checking Sentinel...');
-  try{
-    const data=await api('/api/zenops/exec',{
-      method:'POST',
-      body:JSON.stringify({cmd:'sentinel',args})
-    });
-    const icon=data.ok?'✅':'❌';
-    S.messages.push({role:'assistant',content:`**${icon} Sentinel**\n\`\`\`\n${(data.result||'').slice(0,2000)}\n\`\`\`\n`});
-    renderMessages();
-    showToast(data.ok?'Sentinel status retrieved':'Sentinel error');
-  }catch(e){
-    S.messages.push({role:'assistant',content:`**❌ Sentinel check failed:** ${e.message}`});
-    renderMessages();
-  }
-  setStatus('');
-}
-
-async function cmdScribe(args){
-  if(!args.trim()){showToast('Usage: /scribe <task>');return;}
-  setStatus('Delegating to Scribe...');
-  try{
-    const data=await api('/api/zenops/exec',{
-      method:'POST',
-      body:JSON.stringify({cmd:'scribe',args})
-    });
-    const icon=data.ok?'✅':'❌';
-    S.messages.push({role:'assistant',content:`**${icon} Scribe**\n\`\`\`\n${(data.result||'').slice(0,2000)}\n\`\`\`\n`});
-    renderMessages();
-    showToast(data.ok?'Delegated to Scribe':'Scribe error');
-  }catch(e){
-    S.messages.push({role:'assistant',content:`**❌ Scribe delegation failed:** ${e.message}`});
-    renderMessages();
-  }
-  setStatus('');
-}
-
-// P6/B3: Conversation branching
-async function cmdBranch(){
-  if(!S.session){showToast('No active session to branch');return;}
-  const parentSid=S.session.session_id;
-  // Find the last user message index as the branch point
-  let branchIdx=S.messages.length;
-  for(let i=S.messages.length-1;i>=0;i--){
-    if(S.messages[i].role==='user'){branchIdx=i+1;break;}
-  }
-  try{
-    const data=await api('/api/session/branch',{
-      method:'POST',
-      body:JSON.stringify({session_id:parentSid,branch_index:branchIdx})
-    });
-    if(data.session){
-      await newSession();
-      S.session=data.session;
-      S.messages=data.session.messages||[];
-      localStorage.setItem('hermes-webui-session',S.session.session_id);
-      syncTopbar();renderMessages();
-      showToast('Branched from session "'+(S.session.title||'Untitled')+'"');
-    } else {
-      showToast('Branch failed: '+JSON.stringify(data));
+    const data = await api('/api/skills');
+    let skills = data.skills || [];
+    if(args){
+      const q = args.toLowerCase();
+      skills = skills.filter(s =>
+        (s.name||'').toLowerCase().includes(q) ||
+        (s.description||'').toLowerCase().includes(q) ||
+        (s.category||'').toLowerCase().includes(q)
+      );
     }
+    if(!skills.length){
+      const msg = {role:'assistant', content: args ? `No skills matching "${args}".` : 'No skills found.'};
+      S.messages.push(msg); renderMessages(); return;
+    }
+    // Group by category
+    const byCategory = {};
+    skills.forEach(s => {
+      const cat = s.category || 'General';
+      if(!byCategory[cat]) byCategory[cat] = [];
+      byCategory[cat].push(s);
+    });
+    const lines = [];
+    for(const [cat, items] of Object.entries(byCategory).sort()){
+      lines.push(`**${cat}**`);
+      items.forEach(s => {
+        const desc = s.description ? ` — ${s.description.slice(0,80)}${s.description.length>80?'...':''}` : '';
+        lines.push(`  \`${s.name}\`${desc}`);
+      });
+      lines.push('');
+    }
+    const header = args
+      ? `Skills matching "${args}" (${skills.length}):\n\n`
+      : `Available skills (${skills.length}):\n\n`;
+    S.messages.push({role:'assistant', content: header + lines.join('\n')});
+    renderMessages();
+    showToast(t('type_slash'));
   }catch(e){
-    showToast('Branch failed: '+e.message);
+    showToast('Failed to load skills: '+e.message);
   }
+}
+
+async function cmdPersonality(args){
+  if(!S.session){showToast(t('no_active_session'));return;}
+  if(!args){
+    // List available personalities
+    try{
+      const data=await api('/api/personalities');
+      if(!data.personalities||!data.personalities.length){
+        showToast(t('no_personalities'));
+        return;
+      }
+      const list=data.personalities.map(p=>`  **${p.name}**${p.description?' — '+p.description:''}`).join('\n');
+      S.messages.push({role:'assistant',content:t('available_personalities')+'\n\n'+list+t('personality_switch_hint')});
+      renderMessages();
+    }catch(e){showToast(t('personalities_load_failed'));}
+    return;
+  }
+  const name=args.trim();
+  if(name.toLowerCase()==='none'||name.toLowerCase()==='default'||name.toLowerCase()==='clear'){
+    try{
+      await api('/api/personality/set',{method:'POST',body:JSON.stringify({session_id:S.session.session_id,name:''})});
+      showToast(t('personality_cleared'));
+    }catch(e){showToast(t('failed_colon')+e.message);}
+    return;
+  }
+  try{
+    const res=await api('/api/personality/set',{method:'POST',body:JSON.stringify({session_id:S.session.session_id,name})});
+    showToast(t('personality_set')+name);
+  }catch(e){showToast(t('failed_colon')+e.message);}
 }
 
 // ── Autocomplete dropdown ───────────────────────────────────────────────────

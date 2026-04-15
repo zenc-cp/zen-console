@@ -1,14 +1,9 @@
 """
 Hermes Web UI -- Session model and in-memory session store.
-
-Performance Fix #2: Append-Only Message Log
-  - save() writes only session metadata to {session_id}.json
-  - New messages are appended to {session_id}.jsonl (one JSON object per line)
-  - load() reconstructs the full session from .json + .jsonl
-  - Reduces disk I/O from multi-MB JSON rewrites to small appends
 """
 import collections
 import json
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -20,17 +15,7 @@ from api.config import (
 )
 from api.workspace import get_last_workspace
 
-# P4: In-memory cache for session index — avoids disk I/O on every sidebar open
-_INDEX_CACHE_TTL = 5.0  # seconds
-_index_cache = []
-_index_cache_time = 0.0
-
-
-def _invalidate_index_cache():
-    """Invalidate the session index cache (call whenever sessions are modified)."""
-    global _index_cache, _index_cache_time
-    _index_cache = []
-    _index_cache_time = 0.0
+logger = logging.getLogger(__name__)
 
 
 def _write_session_index():
@@ -42,27 +27,27 @@ def _write_session_index():
             s = Session.load(p.stem)
             if s: entries.append(s.compact())
         except Exception:
-            pass
+            logger.debug("Failed to load session from %s", p)
     with LOCK:
         for s in SESSIONS.values():
             if not any(e['session_id'] == s.session_id for e in entries):
                 entries.append(s.compact())
     entries.sort(key=lambda s: s['updated_at'], reverse=True)
     SESSION_INDEX_FILE.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding='utf-8')
-    # P4: refresh cache so next all_sessions() call doesn't re-read disk
-    global _index_cache, _index_cache_time
-    _index_cache = entries
-    _index_cache_time = time.monotonic()
 
 
 class Session:
-    def __init__(self, session_id=None, title='Untitled',
+    def __init__(self, session_id: str=None, title: str='Untitled',
                  workspace=str(DEFAULT_WORKSPACE), model=DEFAULT_MODEL,
                  messages=None, created_at=None, updated_at=None,
-                 tool_calls=None, pinned=False, archived=False,
-                 project_id=None, profile=None,
-                 input_tokens=0, output_tokens=0, estimated_cost=None,
-                 message_count=None,
+                 tool_calls=None, pinned: bool=False, archived: bool=False,
+                 project_id: str=None, profile=None,
+                 input_tokens: int=0, output_tokens: int=0, estimated_cost=None,
+                 personality=None,
+                 active_stream_id: str=None,
+                 pending_user_message: str=None,
+                 pending_attachments=None,
+                 pending_started_at=None,
                  **kwargs):
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.title = title
@@ -79,105 +64,36 @@ class Session:
         self.input_tokens = input_tokens or 0
         self.output_tokens = output_tokens or 0
         self.estimated_cost = estimated_cost
-        # Track how many messages have been persisted to the .jsonl sidecar
-        # so we only append truly new messages on the next save().
-        self._persisted_message_count = len(self.messages)
+        self.personality = personality
+        self.active_stream_id = active_stream_id
+        self.pending_user_message = pending_user_message
+        self.pending_attachments = pending_attachments or []
+        self.pending_started_at = pending_started_at
 
     @property
     def path(self):
         return SESSION_DIR / f'{self.session_id}.json'
 
-    @property
-    def jsonl_path(self):
-        """Path to the append-only message log sidecar file."""
-        return SESSION_DIR / f'{self.session_id}.jsonl'
-
-    # ── Performance Fix #2: Append-Only Message Log ───────────────────────────
-
-    def save(self):
-        """
-        Write session metadata to .json and append new messages to .jsonl.
-
-        Only the metadata fields (title, model, updated_at, message_count, etc.)
-        are written to the .json file. Messages added since the last save are
-        appended to {session_id}.jsonl, one JSON object per line. This reduces
-        disk I/O from potentially multi-MB full-session rewrites to small,
-        incremental appends.
-        """
-        self.updated_at = time.time()
-
-        # 1. Append new messages (those beyond _persisted_message_count) to .jsonl
-        new_messages = self.messages[self._persisted_message_count:]
-        if new_messages:
-            with self.jsonl_path.open('a', encoding='utf-8') as fh:
-                for msg in new_messages:
-                    fh.write(json.dumps(msg, ensure_ascii=False) + '\n')
-            self._persisted_message_count = len(self.messages)
-
-        # 2. Write only metadata to the .json file — no messages array
-        metadata = {
-            'session_id': self.session_id,
-            'title': self.title,
-            'workspace': self.workspace,
-            'model': self.model,
-            'created_at': self.created_at,
-            'updated_at': self.updated_at,
-            'pinned': self.pinned,
-            'archived': self.archived,
-            'project_id': self.project_id,
-            'profile': self.profile,
-            'input_tokens': self.input_tokens,
-            'output_tokens': self.output_tokens,
-            'estimated_cost': self.estimated_cost,
-            'tool_calls': self.tool_calls,
-            # Store count so compact() can report it without reading .jsonl
-            'message_count': len(self.messages),
-        }
+    def save(self, touch_updated_at: bool = True) -> None:
+        if touch_updated_at:
+            self.updated_at = time.time()
         self.path.write_text(
-            json.dumps(metadata, ensure_ascii=False, indent=2),
+            json.dumps(self.__dict__, ensure_ascii=False, indent=2),
             encoding='utf-8',
         )
-        # Index rebuild is lazy — triggered by all_sessions() when stale,
-        # not on every save. Saves 100-500ms per chat turn.
+        _write_session_index()
 
     @classmethod
     def load(cls, sid):
-        """
-        Reconstruct a Session from its .json metadata + .jsonl message log.
-
-        Falls back gracefully to the legacy all-in-one .json format if the
-        .json contains a 'messages' key (e.g. sessions saved before this fix).
-        """
+        # Validate session ID format to prevent path traversal
+        if not sid or not all(c in '0123456789abcdefghijklmnopqrstuvwxyz_' for c in sid):
+            return None
         p = SESSION_DIR / f'{sid}.json'
         if not p.exists():
             return None
-        data = json.loads(p.read_text(encoding='utf-8'))
+        return cls(**json.loads(p.read_text(encoding='utf-8')))
 
-        # Legacy format: messages stored directly in the .json
-        if 'messages' in data:
-            obj = cls(**data)
-            obj._persisted_message_count = len(obj.messages)
-            return obj
-
-        # New format: reconstruct messages from .jsonl sidecar
-        messages = []
-        jsonl_path = SESSION_DIR / f'{sid}.jsonl'
-        if jsonl_path.exists():
-            with jsonl_path.open('r', encoding='utf-8') as fh:
-                for line in fh:
-                    line = line.strip()
-                    if line:
-                        try:
-                            messages.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass  # skip malformed lines
-
-        data['messages'] = messages
-        obj = cls(**data)
-        obj._persisted_message_count = len(messages)
-        return obj
-
-    def compact(self):
+    def compact(self) -> dict:
         return {
             'session_id': self.session_id,
             'title': self.title,
@@ -193,6 +109,7 @@ class Session:
             'input_tokens': self.input_tokens,
             'output_tokens': self.output_tokens,
             'estimated_cost': self.estimated_cost,
+            'personality': self.personality,
         }
 
 def get_session(sid):
@@ -227,29 +144,10 @@ def new_session(workspace=None, model=None):
     return s
 
 def all_sessions():
-    global _index_cache, _index_cache_time
-    # P4: use in-memory cache if fresh (within TTL); fall back to index file or full scan
-    now = time.monotonic()
-    if _index_cache and (now - _index_cache_time) < _INDEX_CACHE_TTL:
-        # Return cached index, overlay in-memory sessions and backfill profile
-        index_map = {s['session_id']: s for s in _index_cache}
-        with LOCK:
-            for s in SESSIONS.values():
-                index_map[s.session_id] = s.compact()
-        result = sorted(index_map.values(), key=lambda s: (s.get('pinned', False), s['updated_at']), reverse=True)
-        result = [s for s in result if not (s.get('title','Untitled')=='Untitled' and s.get('message_count',0)==0)]
-        for s in result:
-            if not s.get('profile'):
-                s['profile'] = 'default'
-        return result
-
-    # Index file read (original Phase C logic)
+    # Phase C: try index first for O(1) read; fall back to full scan
     if SESSION_INDEX_FILE.exists():
         try:
             index = json.loads(SESSION_INDEX_FILE.read_text(encoding='utf-8'))
-            # P4: populate cache on first read
-            _index_cache = list(index)
-            _index_cache_time = now
             # Overlay any in-memory sessions that may be newer than the index
             index_map = {s['session_id']: s for s in index}
             with LOCK:
@@ -265,7 +163,7 @@ def all_sessions():
                     s['profile'] = 'default'
             return result
         except Exception:
-            pass  # fall through to full scan
+            logger.debug("Failed to load session index, falling back to full scan")
     # Full scan fallback
     out = []
     for p in SESSION_DIR.glob('*.json'):
@@ -274,7 +172,7 @@ def all_sessions():
             s = Session.load(p.stem)
             if s: out.append(s)
         except Exception:
-            pass
+            logger.debug("Failed to load session from %s", p)
     for s in SESSIONS.values():
         if all(s.session_id != x.session_id for x in out): out.append(s)
     out.sort(key=lambda s: (getattr(s, 'pinned', False), s.updated_at), reverse=True)
@@ -282,17 +180,10 @@ def all_sessions():
     for s in result:
         if not s.get('profile'):
             s['profile'] = 'default'
-    # P4: cache the result and persist index for future reads
-    _index_cache = list(result)
-    _index_cache_time = now
-    try:
-        SESSION_INDEX_FILE.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
-    except Exception:
-        pass  # index write failure is non-fatal
     return result
 
 
-def title_from(messages, fallback='Untitled'):
+def title_from(messages, fallback: str='Untitled'):
     """Derive a session title from the first user message."""
     for m in messages:
         if m.get('role') == 'user':
@@ -307,7 +198,7 @@ def title_from(messages, fallback='Untitled'):
 
 # ── Project helpers ──────────────────────────────────────────────────────────
 
-def load_projects():
+def load_projects() -> list:
     """Load project list from disk. Returns list of project dicts."""
     if not PROJECTS_FILE.exists():
         return []
@@ -316,12 +207,20 @@ def load_projects():
     except Exception:
         return []
 
-def save_projects(projects):
+def save_projects(projects) -> None:
     """Write project list to disk."""
     PROJECTS_FILE.write_text(json.dumps(projects, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
-def import_cli_session(session_id, title, messages, model='unknown', profile=None):
+def import_cli_session(
+    session_id: str,
+    title: str,
+    messages,
+    model: str='unknown',
+    profile=None,
+    created_at=None,
+    updated_at=None,
+):
     """Create a new WebUI session populated with CLI messages.
     Returns the Session object.
     """
@@ -332,14 +231,16 @@ def import_cli_session(session_id, title, messages, model='unknown', profile=Non
         model=model,
         messages=messages,
         profile=profile,
+        created_at=created_at,
+        updated_at=updated_at,
     )
-    s.save()
+    s.save(touch_updated_at=False)
     return s
 
 
 # ── CLI session bridge ──────────────────────────────────────────────────────
 
-def get_cli_sessions():
+def get_cli_sessions() -> list:
     """Read CLI sessions from the agent's SQLite store and return them as
     dicts in a format the WebUI sidebar can render alongside local sessions.
 
@@ -390,6 +291,7 @@ def get_cli_sessions():
                        MAX(m.timestamp) AS last_activity
                 FROM sessions s
                 LEFT JOIN messages m ON m.session_id = s.id
+                WHERE s.source IS NOT NULL AND s.source != 'webui'
                 GROUP BY s.id
                 ORDER BY COALESCE(MAX(m.timestamp), s.started_at) DESC
                 LIMIT 200
@@ -401,11 +303,13 @@ def get_cli_sessions():
                 # the active CLI profile so sidebar filtering works either way.
                 profile = _cli_profile  # CLI DB has no profile column; use active profile
 
+                _source = row['source'] or 'cli'
+                _display_title = row['title'] or f'{_source.title()} Session'
                 cli_sessions.append({
                     'session_id': sid,
-                    'title': row['title'] or 'CLI Session',
+                    'title': _display_title,
                     'workspace': str(get_last_workspace()),
-                    'model': row['model'] or 'unknown',
+                    'model': row['model'] or None,
                     'message_count': row['message_count'] or 0,
                     'created_at': row['started_at'],
                     'updated_at': raw_ts,
@@ -413,7 +317,7 @@ def get_cli_sessions():
                     'archived': False,
                     'project_id': None,
                     'profile': profile,
-                    'source_tag': 'cli',
+                    'source_tag': _source,
                     'is_cli_session': True,
                 })
     except Exception:
@@ -423,7 +327,7 @@ def get_cli_sessions():
     return cli_sessions
 
 
-def get_cli_session_messages(sid):
+def get_cli_session_messages(sid) -> list:
     """Read messages for a single CLI session from the SQLite store.
     Returns a list of {role, content, timestamp} dicts.
     Returns empty list on any error.
@@ -463,3 +367,33 @@ def get_cli_session_messages(sid):
     except Exception:
         return []
     return msgs
+
+
+def delete_cli_session(sid) -> bool:
+    """Delete a CLI session from state.db (messages + session row).
+    Returns True if deleted, False if not found or error.
+    """
+    import os
+    try:
+        import sqlite3
+    except ImportError:
+        return False
+
+    try:
+        from api.profiles import get_active_hermes_home
+        hermes_home = Path(get_active_hermes_home()).expanduser().resolve()
+    except Exception:
+        hermes_home = Path(os.getenv('HERMES_HOME', str(HOME / '.hermes'))).expanduser().resolve()
+    db_path = hermes_home / 'state.db'
+    if not db_path.exists():
+        return False
+
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
+            cur.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+            conn.commit()
+            return cur.rowcount > 0
+    except Exception:
+        return False

@@ -3,7 +3,7 @@ Sprint 13 Tests: cron recent endpoint, session duplicate, background alerts.
 """
 import json, pathlib, urllib.error, urllib.request
 
-BASE = "http://127.0.0.1:8788"
+from tests._pytest_port import BASE
 
 
 def get(path):
@@ -107,14 +107,16 @@ def test_workspace_add_rejects_nonexistent():
     assert status == 400
 
 def test_workspace_add_accepts_real_dir():
-    """Adding a real directory succeeds."""
-    import tempfile
-    tmp = tempfile.mkdtemp()
+    """Adding a real directory under the trusted workspace root succeeds."""
+    d, _ = post("/api/session/new", {})
+    root = pathlib.Path(d["session"]["workspace"])
+    tmp = root / "trusted-add-test"
+    tmp.mkdir(parents=True, exist_ok=True)
     try:
-        d, status = post("/api/workspaces/add", {"path": tmp, "name": "test-ws"})
+        d, status = post("/api/workspaces/add", {"path": str(tmp), "name": "test-ws"})
         assert status == 200
         assert d["ok"] is True
     finally:
-        post("/api/workspaces/remove", {"path": tmp})
+        post("/api/workspaces/remove", {"path": str(tmp)})
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)

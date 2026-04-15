@@ -1,57 +1,54 @@
 """
 Hermes Web UI -- SSE streaming engine and agent thread runner.
 Includes Sprint 10 cancel support via CANCEL_FLAGS.
-
-Performance Fix #7: Remove env mutations race condition.
-  The original code mutated os.environ['TERMINAL_CWD'] etc. directly inside
-  the agent thread, which causes a race condition when multiple concurrent
-  sessions run simultaneously (last writer wins). The fix:
-    1. Thread-local env context (_set_thread_env) is still set for tools that
-       support it (already in the codebase via config.py).
-    2. A per-session threading.Lock (_agent_lock) wraps all os.environ
-       mutations so only one session at a time can modify the process env.
-    3. The finally block restores all values even if an exception is raised.
-  This is the safest change because AIAgent reads os.environ internally and
-  cannot be patched without forking the agent library.
 """
 import json
+import logging
 import os
 import queue
-import re
-import sys
 import threading
-
-# Multica structured streaming events
-try:
-    from api.streaming_events import emit_agent_status, emit_context_info, emit_cost
-except ImportError:
-    emit_agent_status = emit_context_info = emit_cost = lambda *a, **kw: None
-
 import time
 import traceback
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 from api.config import (
-    STREAMS, STREAMS_LOCK, CANCEL_FLAGS, CLI_TOOLSETS,
+    STREAMS, STREAMS_LOCK, CANCEL_FLAGS, AGENT_INSTANCES, CLI_TOOLSETS,
+    LOCK, SESSIONS, SESSION_DIR,
     _get_session_agent_lock, _set_thread_env, _clear_thread_env,
     resolve_model_provider,
 )
+from api.helpers import redact_session_data
 
-# Performance Fix #7: Global lock protecting os.environ mutations.
-# Prevents concurrent sessions from clobbering each other's TERMINAL_CWD,
-# HERMES_SESSION_KEY, etc. when the per-session agent lock is not held
-# (e.g. between the lock acquisition and the first os.environ write).
-_ENV_MUTATION_LOCK = threading.Lock()
-
-# Thinking/response stream separator (MiniMax M2.7 extended thinking)
-_THINKING_OPEN  = "<thinking>"
-_THINKING_CLOSE = "</thinking>"
+# Global lock for os.environ writes. Per-session locks (_agent_lock) prevent
+# concurrent runs of the SAME session, but two DIFFERENT sessions can still
+# interleave their os.environ writes. This global lock serializes the env
+# save/restore around the entire agent run.
+_ENV_LOCK = threading.Lock()
 
 # Lazy import to avoid circular deps -- hermes-agent is on sys.path via api/config.py
 try:
     from run_agent import AIAgent
 except ImportError:
     AIAgent = None
+
+def _get_ai_agent():
+    """Return AIAgent class, retrying the import if the initial attempt failed.
+
+    auto_install_agent_deps() in server.py may install missing packages after
+    this module is first imported (common in Docker with a volume-mounted agent).
+    Re-attempting the import here picks up the newly installed packages without
+    requiring a server restart.
+    """
+    global AIAgent
+    if AIAgent is None:
+        try:
+            from run_agent import AIAgent as _cls  # noqa: PLC0415
+            AIAgent = _cls
+        except ImportError:
+            pass
+    return AIAgent
 from api.models import get_session, title_from
 from api.workspace import set_last_workspace
 
@@ -59,74 +56,6 @@ from api.workspace import set_last_workspace
 # Everything else (attachments, timestamp, _ts, etc.) is display-only
 # metadata added by the webui and must be stripped before the API call.
 _API_SAFE_MSG_KEYS = {'role', 'content', 'tool_calls', 'tool_call_id', 'name', 'refusal'}
-
-# ── Hallucination guard: detect and strip fabricated tool output ──────────
-
-_FAKE_OUTPUT_PATTERNS = [
-    re.compile(r'\{\s*"output"\s*:\s*"[^"]*"\s*,\s*"exit_code"\s*:\s*\d+[^}]*\}'),
-    re.compile(r'\{\s*"output"\s*:\s*"[^"]*"\s*,\s*"stderr"\s*:\s*"[^"]*"\s*,\s*"exit_code"\s*:\s*\d+[^}]*\}'),
-    re.compile(r'Executing:\s*\n\s*[{`]'),
-    re.compile(r'(?:Output|Result):\s*\n\s*\{\s*"(?:output|result|exit_code)'),
-    re.compile(r'(?:Running|Executing)\s+`[^`]+`[:\s]*\n```(?:json|bash|sh)?\s*\n\s*\{[^}]*"(?:output|exit_code)"'),
-]
-
-_FAKE_TOKEN_PATTERN = re.compile(
-    r'\{\s*"(?:output|exit_code|stderr)"\s*:'
-)
-
-
-def _contains_fake_tool_output(text: str) -> bool:
-    if not text:
-        return False
-    for pat in _FAKE_OUTPUT_PATTERNS:
-        if pat.search(text):
-            return True
-    return False
-
-
-def _strip_fake_tool_output(text: str) -> str:
-    if not text:
-        return text
-    cleaned = re.sub(
-        r'\{\s*"output"\s*:\s*"[^"]*"\s*,\s*(?:"stderr"\s*:\s*"[^"]*"\s*,\s*)?'
-        r'"exit_code"\s*:\s*\d+[^}]*\}',
-        '[Fabricated output removed — use the terminal tool to execute commands]',
-        text,
-    )
-    return cleaned
-
-
-_ANTI_HALLUCINATION_PROMPT = """
-CRITICAL EXECUTION RULES — TOOL USE ONLY:
-- You MUST use the terminal tool to run ANY shell command. NEVER write command output yourself.
-- NEVER write {"output": ..., "exit_code": ...} in your response text. That JSON format comes ONLY from actual tool execution results.
-- NEVER fabricate, guess, or simulate command output. If you need to know the result of a command, call the terminal tool.
-- If a command fails, report the actual error from the tool result. Never fabricate success.
-- "Executing:" followed by JSON you wrote is NOT execution — it is hallucination. Use the terminal tool instead.
-- When asked to run a command, you MUST call the terminal tool. Writing the expected output is not acceptable.
-- After calling a tool, wait for the real result before continuing. Do not predict or pre-write tool results.
-""".strip()
-
-
-# Context window guard
-_MAX_HISTORY_CHARS = 400_000
-
-def _trim_history(messages):
-    if not messages:
-        return messages
-    total = sum(len(str(m.get("content", ""))) for m in messages)
-    if total <= _MAX_HISTORY_CHARS:
-        return messages
-    system_msgs = [m for m in messages if m.get("role") == "system"]
-    other_msgs = [m for m in messages if m.get("role") != "system"]
-    while len(other_msgs) > 2:
-        total = sum(len(str(m.get("content", ""))) for m in system_msgs + other_msgs)
-        if total <= _MAX_HISTORY_CHARS:
-            break
-        other_msgs = other_msgs[2:]
-    trimmed = system_msgs + other_msgs
-    print(f"[webui] context trim: {len(messages)} to {len(trimmed)} messages", flush=True)
-    return trimmed
 
 
 def _sanitize_messages_for_api(messages):
@@ -171,7 +100,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
         try:
             q.put_nowait((event, data))
         except Exception:
-            pass
+            logger.debug("Failed to put event to queue")
 
     try:
         s = get_session(session_id)
@@ -198,19 +127,11 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             HERMES_SESSION_KEY=session_id,
             HERMES_HOME=_profile_home,
         )
-        # Performance Fix #7: Wrap os.environ mutations in the global env lock
-        # AND the per-session agent lock to eliminate race conditions.
-        #
-        # The per-session lock (_agent_lock) prevents the same session from
-        # running two agents simultaneously. The global _ENV_MUTATION_LOCK
-        # prevents two different sessions from corrupting each other's env
-        # values in the brief window between acquiring _agent_lock and
-        # finishing all reads/writes to os.environ.
-        #
-        # Locking order: always acquire _agent_lock before _ENV_MUTATION_LOCK
-        # to prevent deadlocks (consistent ordering across all callers).
-        with _agent_lock:
-          with _ENV_MUTATION_LOCK:
+        # Still set process-level env as fallback for tools that bypass thread-local
+        # Acquire lock only for the env mutation, then release before the agent runs.
+        # The finally block re-acquires to restore — keeping critical sections short
+        # and preventing a deadlock where the restore would re-enter the same lock.
+        with _ENV_LOCK:
             old_cwd = os.environ.get('TERMINAL_CWD')
             old_exec_ask = os.environ.get('HERMES_EXEC_ASK')
             old_session_key = os.environ.get('HERMES_SESSION_KEY')
@@ -220,78 +141,131 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             os.environ['HERMES_SESSION_KEY'] = session_id
             if _profile_home:
                 os.environ['HERMES_HOME'] = _profile_home
-          # _ENV_MUTATION_LOCK released here — env is set, agent can now run.
-          # The _agent_lock is still held for the duration of the agent run
-          # to prevent another session from clobbering our env values.
-
-          try:
-            # ── Hallucination-guarded token callback ──────────────
-            _token_buf = []
-            _token_buf_len = 0
-            _BUF_THRESHOLD = 200
-
-            def _flush_token_buf():
-                nonlocal _token_buf, _token_buf_len
-                if not _token_buf:
-                    return
-                combined = ''.join(_token_buf)
-                _token_buf = []
-                _token_buf_len = 0
-                if _contains_fake_tool_output(combined):
-                    cleaned = _strip_fake_tool_output(combined)
-                    if cleaned.strip():
-                        put('token', {'text': cleaned})
-                    print('[webui] hallucination guard: stripped fake tool output from stream', flush=True)
-                else:
-                    put('token', {'text': combined})
-
-            # _route_token: hallucination-guard logic extracted for use by ThinkingRouter
-            def _route_token(text):
-                nonlocal _token_buf, _token_buf_len
-                if _FAKE_TOKEN_PATTERN.search(text) or (_token_buf and _FAKE_TOKEN_PATTERN.search(''.join(_token_buf) + text)):
-                    _token_buf.append(text)
-                    _token_buf_len += len(text)
-                    if _token_buf_len >= _BUF_THRESHOLD:
-                        _flush_token_buf()
-                    return
-                if _token_buf:
-                    _token_buf.append(text)
-                    _flush_token_buf()
-                    return
-                put('token', {'text': text})
-
-            # Wire ThinkingRouter: thinking tokens → SSE 'thinking' event;
-            # normal tokens → existing hallucination-guard path.
-            from api.thinking_router import ThinkingRouter as _TR
-            _thinking_router = _TR(
-                on_token=_route_token,
-                on_thinking=lambda t: put('thinking', {'text': t}),
+        # Lock released — agent runs without holding it
+        # Register a gateway-style notify callback so the approval system can
+        # push the `approval` SSE event the moment a dangerous command is
+        # detected, without waiting for the next on_tool() poll cycle.
+        # Without this, the agent thread blocks inside the terminal tool
+        # waiting for approval that the UI never knew to ask for, leaving
+        # the chat stuck in "Thinking…" forever.
+        _approval_registered = False
+        _unreg_notify = None
+        try:
+            from tools.approval import (
+                register_gateway_notify as _reg_notify,
+                unregister_gateway_notify as _unreg_notify,
             )
+            def _approval_notify_cb(approval_data):
+                put('approval', approval_data)
+            _reg_notify(session_id, _approval_notify_cb)
+            _approval_registered = True
+        except ImportError:
+            logger.debug("Approval module not available, falling back to polling")
+
+        try:
+            _token_sent = False  # tracks whether any streamed tokens were sent
+            _reasoning_text = ''  # accumulates reasoning/thinking trace for persistence
 
             def on_token(text):
+                nonlocal _token_sent
                 if text is None:
-                    _thinking_router.flush()
-                    _flush_token_buf()
-                    return
-                _thinking_router.feed(text)
+                    return  # end-of-stream sentinel
+                _token_sent = True
+                put('token', {'text': text})
 
-            def on_tool(name, preview, args):
+            def on_reasoning(text):
+                nonlocal _reasoning_text
+                if text is None:
+                    return
+                _reasoning_text += str(text)
+                put('reasoning', {'text': str(text)})
+
+            def on_tool(*cb_args, **cb_kwargs):
+                event_type = None
+                name = None
+                preview = None
+                args = None
+
+                if len(cb_args) >= 4:
+                    event_type, name, preview, args = cb_args[:4]
+                elif len(cb_args) == 3:
+                    name, preview, args = cb_args
+                    event_type = 'tool.started'
+                elif len(cb_args) == 2:
+                    event_type, name = cb_args
+                elif len(cb_args) == 1:
+                    name = cb_args[0]
+                    event_type = 'tool.started'
+
+                if event_type in ('reasoning.available', '_thinking'):
+                    reason_text = preview if event_type == 'reasoning.available' else name
+                    if reason_text:
+                        put('reasoning', {'text': str(reason_text)})
+                    return
+
                 args_snap = {}
                 if isinstance(args, dict):
                     for k, v in list(args.items())[:4]:
-                        s2 = str(v); args_snap[k] = s2[:120]+('...' if len(s2)>120 else '')
-                put('tool', {'name': name, 'preview': preview, 'args': args_snap})
-                # also check for pending approval and surface it immediately
-                from webui_tools.approval import has_pending as _has_pending, _pending, _lock
-                if _has_pending(session_id):
-                    with _lock:
-                        p = dict(_pending.get(session_id, {}))
-                    if p:
-                        put('approval', p)
+                        s2 = str(v)
+                        args_snap[k] = s2[:120] + ('...' if len(s2) > 120 else '')
 
-            if AIAgent is None:
+                if event_type in (None, 'tool.started'):
+                    put('tool', {
+                        'event_type': event_type or 'tool.started',
+                        'name': name,
+                        'preview': preview,
+                        'args': args_snap,
+                    })
+                    # Fallback: poll for pending approval in case notify_cb wasn't
+                    # registered (e.g. older approval module without gateway support).
+                    try:
+                        from tools.approval import has_pending as _has_pending, _pending, _lock
+                        if _has_pending(session_id):
+                            with _lock:
+                                p = dict(_pending.get(session_id, {}))
+                            if p:
+                                put('approval', p)
+                    except ImportError:
+                        pass
+                    return
+
+                if event_type == 'tool.completed':
+                    put('tool_complete', {
+                        'event_type': event_type,
+                        'name': name,
+                        'preview': preview,
+                        'args': args_snap,
+                        'duration': cb_kwargs.get('duration'),
+                        'is_error': bool(cb_kwargs.get('is_error', False)),
+                    })
+                    return
+
+            _AIAgent = _get_ai_agent()
+            if _AIAgent is None:
                 raise ImportError("AIAgent not available -- check that hermes-agent is on sys.path")
+
+            # Initialize SessionDB so session_search works in WebUI sessions
+            _session_db = None
+            try:
+                from hermes_state import SessionDB
+                _session_db = SessionDB()
+            except Exception as _db_err:
+                print(f"[webui] WARNING: SessionDB init failed — session_search will be unavailable: {_db_err}", flush=True)
             resolved_model, resolved_provider, resolved_base_url = resolve_model_provider(model)
+
+            # Resolve API key via Hermes runtime provider (matches gateway behaviour).
+            # Pass the resolved provider so non-default providers get their own credentials.
+            resolved_api_key = None
+            try:
+                from hermes_cli.runtime_provider import resolve_runtime_provider
+                _rt = resolve_runtime_provider(requested=resolved_provider)
+                resolved_api_key = _rt.get("api_key")
+                if not resolved_provider:
+                    resolved_provider = _rt.get("provider")
+                if not resolved_base_url:
+                    resolved_base_url = _rt.get("base_url")
+            except Exception as _e:
+                print(f"[webui] WARNING: resolve_runtime_provider failed: {_e}", flush=True)
 
             # Read per-profile config at call time (not module-level snapshot)
             from api.config import get_config as _get_config
@@ -316,19 +290,35 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             else:
                 _fallback_resolved = None
 
-            agent = AIAgent(
+            agent = _AIAgent(
                 model=resolved_model,
                 provider=resolved_provider,
                 base_url=resolved_base_url,
+                api_key=resolved_api_key,
                 platform='cli',
                 quiet_mode=True,
                 enabled_toolsets=_toolsets,
                 fallback_model=_fallback_resolved,
                 session_id=session_id,
+                session_db=_session_db,
                 stream_delta_callback=on_token,
+                reasoning_callback=on_reasoning,
                 tool_progress_callback=on_tool,
-                reasoning_callback=lambda t: put('thinking', {'text': t}),
             )
+
+            # Store agent instance for cancel/interrupt propagation
+            with STREAMS_LOCK:
+                AGENT_INSTANCES[stream_id] = agent
+                # Check if cancel was requested during agent initialization
+                if stream_id in CANCEL_FLAGS and CANCEL_FLAGS[stream_id].is_set():
+                    # Cancel arrived during agent creation - interrupt immediately
+                    try:
+                        agent.interrupt("Cancelled before start")
+                    except Exception:
+                        logger.debug("Failed to interrupt agent before start")
+                    put('cancel', {'message': 'Cancelled by user'})
+                    return
+
             # Prepend workspace context so the agent always knows which directory
             # to use for file operations, regardless of session age or AGENTS.md defaults.
             workspace_ctx = f"[Workspace: {s.workspace}]\n"
@@ -343,72 +333,116 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 "write_file, read_file, search_files, terminal workdir, and patch. "
                 "Never fall back to a hardcoded path when this tag is present."
             )
+            # Resolve personality prompt from config.yaml agent.personalities
+            # (matches hermes-agent CLI behavior — passes via ephemeral_system_prompt)
+            _personality_prompt = None
+            _pname = getattr(s, 'personality', None)
+            if _pname:
+                _agent_cfg = _cfg.get('agent', {})
+                _personalities = _agent_cfg.get('personalities', {})
+                if isinstance(_personalities, dict) and _pname in _personalities:
+                    _pval = _personalities[_pname]
+                    if isinstance(_pval, dict):
+                        _parts = [_pval.get('system_prompt', '') or _pval.get('prompt', '')]
+                        if _pval.get('tone'):
+                            _parts.append(f'Tone: {_pval["tone"]}')
+                        if _pval.get('style'):
+                            _parts.append(f'Style: {_pval["style"]}')
+                        _personality_prompt = '\n'.join(p for p in _parts if p)
+                    else:
+                        _personality_prompt = str(_pval)
+            # Pass personality via ephemeral_system_prompt (agent's own mechanism)
+            if _personality_prompt:
+                agent.ephemeral_system_prompt = _personality_prompt
+            result = agent.run_conversation(
+                user_message=workspace_ctx + msg_text,
+                system_message=workspace_system_msg,
+                conversation_history=_sanitize_messages_for_api(s.messages),
+                task_id=session_id,
+                persist_user_message=msg_text,
+            )
+            s.messages = result.get('messages') or s.messages
 
-            # ── Tier 1 SessionStart: inject knowledge index ───────────────
-            # Read ~/claw/memory/knowledge/index.md (if it exists) and prepend
-            # its contents to workspace_system_msg so Hermes starts each session
-            # with accumulated institutional knowledge.
-            try:
-                _mem_index = Path(_profile_home or str(Path.home() / "claw")) / "memory" / "knowledge" / "index.md"
-                if _mem_index.exists():
-                    _index_text = _mem_index.read_text(encoding="utf-8", errors="replace")
-                    # Cap at 20K chars to avoid prompt bloat
-                    if len(_index_text) > 20000:
-                        _index_text = _index_text[:20000] + "\n[...index truncated at 20K chars...]\n"
-                    workspace_system_msg = (
-                        "## ZenOps Knowledge Base (SessionStart)\n"
-                        + _index_text
-                        + "\n---\n"
-                        + workspace_system_msg
-                    )
-                    print(f"[webui] memory: injected index.md ({len(_index_text)} chars)", flush=True)
-            except Exception as _mem_err:
-                print(f"[webui] memory: index injection skipped ({_mem_err})", flush=True)
-            emit_agent_status(put, 'thinking')
-            emit_context_info(put, input_tokens=0, model=model)
-            # Watchdog: kill agent if it takes >120s (prevents thread exhaustion)
-            _agent_timeout = 300  # 5 min (was 180s, caused timeouts on complex tasks)
-            _agent_result = [None]
-            _agent_error = [None]
-            def _run_agent_inner():
-                try:
-                    _agent_result[0] = agent.run_conversation(
-                        user_message=workspace_ctx + msg_text,
-                        system_message=workspace_system_msg,
-                        conversation_history=_trim_history(_sanitize_messages_for_api(s.messages)),
-                        task_id=session_id,
-                        persist_user_message=msg_text,
-                    )
-                except Exception as e:
-                    _agent_error[0] = e
-            _inner_thr = threading.Thread(target=_run_agent_inner, daemon=True)
-            _inner_thr.start()
-            _inner_thr.join(timeout=_agent_timeout)
-            if _inner_thr.is_alive():
-                put('error', {'message': f'Agent timed out after {_agent_timeout}s. Try a different model or start a new session.'})
-                put('done', {'session': {'messages': s.messages}})
-                print(f'[webui] TIMEOUT: agent for {session_id} killed after {_agent_timeout}s', flush=True)
-                return
-            if _agent_error[0]:
-                raise _agent_error[0]
-            result = _agent_result[0]
-            # ── Post-run hallucination scrub ───────────────────────
-            _result_msgs = result.get('messages') or s.messages
-            _hallucination_count = 0
-            for _m in _result_msgs:
-                if _m.get('role') == 'assistant' and isinstance(_m.get('content'), str):
-                    if _contains_fake_tool_output(_m['content']):
-                        _m['content'] = _strip_fake_tool_output(_m['content'])
-                        _hallucination_count += 1
-            if _hallucination_count:
-                print(f'[webui] hallucination guard: scrubbed {_hallucination_count} assistant message(s) with fake tool output', flush=True)
-            s.messages = _result_msgs
+            # ── Detect silent agent failure (no assistant reply produced) ──
+            # When the agent catches an auth/network error internally it may return
+            # an empty final_response without raising — the stream would end with
+            # a done event containing zero assistant messages, leaving the user with
+            # no feedback. Emit an apperror so the client shows an inline error.
+            _assistant_added = any(
+                m.get('role') == 'assistant' and str(m.get('content') or '').strip()
+                for m in (result.get('messages') or [])
+            )
+            # _token_sent tracks whether on_token() was called (any streamed text)
+            if not _assistant_added and not _token_sent:
+                _last_err = getattr(agent, '_last_error', None) or result.get('error') or ''
+                _err_str = str(_last_err) if _last_err else ''
+                _is_auth = (
+                    '401' in _err_str
+                    or (_last_err and 'AuthenticationError' in type(_last_err).__name__)
+                    or 'authentication' in _err_str.lower()
+                    or 'unauthorized' in _err_str.lower()
+                    or 'invalid api key' in _err_str.lower()
+                    or 'invalid_api_key' in _err_str.lower()
+                )
+                if _is_auth:
+                    put('apperror', {
+                        'message': _err_str or 'Authentication failed — check your API key.',
+                        'type': 'auth_mismatch',
+                        'hint': (
+                            'The selected model may not be supported by your configured provider or '
+                            'your API key is invalid. Run `hermes model` in your terminal to '
+                            'update credentials, then restart the WebUI.'
+                        ),
+                    })
+                else:
+                    put('apperror', {
+                        'message': _err_str or 'The agent returned no response. Check your API key and model selection.',
+                        'type': 'no_response',
+                        'hint': 'Verify your API key is valid and the selected model is available for your account.',
+                    })
+                return  # Don't emit done — the apperror already closes the stream on the client
+
+            # ── Handle context compression side effects ──
+            # If compression fired inside run_conversation, the agent may have
+            # rotated its session_id. Detect and fix the mismatch so the WebUI
+            # continues writing to the correct session file.
+            _agent_sid = getattr(agent, 'session_id', None)
+            _compressed = False
+            if _agent_sid and _agent_sid != session_id:
+                old_sid = session_id
+                new_sid = _agent_sid
+                # Rename the session file
+                old_path = SESSION_DIR / f'{old_sid}.json'
+                new_path = SESSION_DIR / f'{new_sid}.json'
+                s.session_id = new_sid
+                with LOCK:
+                    if old_sid in SESSIONS:
+                        SESSIONS[new_sid] = SESSIONS.pop(old_sid)
+                if old_path.exists() and not new_path.exists():
+                    try:
+                        old_path.rename(new_path)
+                    except OSError:
+                        logger.debug("Failed to rename session file during compression")
+                _compressed = True
+            # Also detect compression via the result dict or compressor state
+            if not _compressed:
+                _compressor = getattr(agent, 'context_compressor', None)
+                if _compressor and getattr(_compressor, 'compression_count', 0) > 0:
+                    _compressed = True
+            # Notify the frontend that compression happened
+            if _compressed:
+                put('compressed', {
+                    'message': 'Context auto-compressed to continue the conversation',
+                })
+
             # Stamp 'timestamp' on any messages that don't have one yet
             _now = time.time()
             for _m in s.messages:
                 if isinstance(_m, dict) and not _m.get('timestamp') and not _m.get('_ts'):
                     _m['timestamp'] = int(_now)
-            s.title = title_from(s.messages, s.title)
+            # Only auto-generate title when still default; preserves user renames
+            if s.title == 'Untitled' or s.title == 'New Chat' or not s.title:
+                s.title = title_from(s.messages, s.title)
             # Read token/cost usage from the agent object (if available)
             input_tokens = getattr(agent, 'session_prompt_tokens', 0) or 0
             output_tokens = getattr(agent, 'session_completion_tokens', 0) or 0
@@ -427,6 +461,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             for msg_idx, m in enumerate(s.messages):
                 if m.get('role') == 'assistant':
                     c = m.get('content', '')
+                    # Anthropic format: content is a list with type=tool_use blocks
                     if isinstance(c, list):
                         for p in c:
                             if isinstance(p, dict) and p.get('type') == 'tool_use':
@@ -434,6 +469,22 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                                 pending_names[tid] = p.get('name', '')
                                 pending_args[tid] = p.get('input', {})
                                 pending_asst_idx[tid] = msg_idx
+                    # OpenAI format: tool_calls as top-level field on the message
+                    for tc in m.get('tool_calls', []):
+                        if not isinstance(tc, dict):
+                            continue
+                        tid = tc.get('id', '') or tc.get('call_id', '')
+                        fn = tc.get('function', {})
+                        name = fn.get('name', '')
+                        try:
+                            import json as _j
+                            args = _j.loads(fn.get('arguments', '{}') or '{}')
+                        except Exception:
+                            args = {}
+                        if tid and name:
+                            pending_names[tid] = name
+                            pending_args[tid] = args
+                            pending_asst_idx[tid] = msg_idx
                 elif m.get('role') == 'tool':
                     tid = m.get('tool_call_id') or m.get('tool_use_id', '')
                     name = pending_names.get(tid, '')
@@ -458,6 +509,10 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         'assistant_msg_idx': asst_idx, 'args': args_snap,
                     })
             s.tool_calls = tool_calls
+            s.active_stream_id = None
+            s.pending_user_message = None
+            s.pending_attachments = []
+            s.pending_started_at = None
             # Tag the matching user message with attachment filenames for display on reload
             # Only tag a user message whose content relates to this turn's text
             # (msg_text is the full message including the [Attached files: ...] suffix)
@@ -471,39 +526,46 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                             m['attachments'] = attachments
                             break
             s.save()
-            usage = {'input_tokens': input_tokens, 'output_tokens': output_tokens, 'estimated_cost': estimated_cost}
-            emit_cost(put, usage.get("input_tokens",0), usage.get("output_tokens",0), model=model, cost_usd=usage.get("estimated_cost",0))
-            emit_agent_status(put, "idle")
-            put('done', {'session': s.compact() | {'messages': s.messages, 'tool_calls': tool_calls}, 'usage': usage})
-
-            # ── Tier 1 SessionEnd: spawn flush.py detached ────────────────
-            # Persist session memory to ~/claw/memory/daily/YYYY-MM-DD.md
-            # without blocking the SSE response.
+            # Sync to state.db for /insights (opt-in setting)
             try:
-                import subprocess as _sp
-                _flush_script = Path(__file__).parent.parent / "scripts" / "flush.py"
-                # Fallback: check common install locations
-                if not _flush_script.exists():
-                    _flush_script = Path(_profile_home or str(Path.home() / "claw")) / "scripts" / "flush.py"
-                if _flush_script.exists():
-                    _flush_env = os.environ.copy()
-                    _flush_env["HERMES_HOME"] = _profile_home or str(Path.home() / "claw")
-                    _sp.Popen(
-                        [sys.executable, str(_flush_script), session_id],
-                        env=_flush_env,
-                        stdout=open(os.devnull, "w"),
-                        stderr=open(os.devnull, "w"),
-                        start_new_session=True,
+                from api.config import load_settings as _load_settings
+                if _load_settings().get('sync_to_insights'):
+                    from api.state_sync import sync_session_usage
+                    sync_session_usage(
+                        session_id=s.session_id,
+                        input_tokens=s.input_tokens or 0,
+                        output_tokens=s.output_tokens or 0,
+                        estimated_cost=s.estimated_cost,
+                        model=model,
+                        title=s.title,
+                        message_count=len(s.messages),
                     )
-                    print(f"[webui] memory: flush.py spawned for session {session_id[:12]}", flush=True)
-                else:
-                    print(f"[webui] memory: flush.py not found at {_flush_script}", flush=True)
-            except Exception as _flush_err:
-                print(f"[webui] memory: SessionEnd flush error ({_flush_err})", flush=True)
-          finally:
-            # Performance Fix #7: Restore env under the mutation lock so
-            # no concurrent session reads a partially-restored env state.
-            with _ENV_MUTATION_LOCK:
+            except Exception:
+                logger.debug("Failed to sync session to insights")
+            usage = {'input_tokens': input_tokens, 'output_tokens': output_tokens, 'estimated_cost': estimated_cost}
+            # Include context window data from the agent's compressor for the UI indicator
+            _cc = getattr(agent, 'context_compressor', None)
+            if _cc:
+                usage['context_length'] = getattr(_cc, 'context_length', 0) or 0
+                usage['threshold_tokens'] = getattr(_cc, 'threshold_tokens', 0) or 0
+                usage['last_prompt_tokens'] = getattr(_cc, 'last_prompt_tokens', 0) or 0
+            # Persist reasoning trace in the session so it survives reload
+            if _reasoning_text and s.messages:
+                for _rm in reversed(s.messages):
+                    if isinstance(_rm, dict) and _rm.get('role') == 'assistant':
+                        _rm['reasoning'] = _reasoning_text
+                        break
+            raw_session = s.compact() | {'messages': s.messages, 'tool_calls': tool_calls}
+            put('done', {'session': redact_session_data(raw_session), 'usage': usage})
+        finally:
+            # Unregister the gateway approval callback and unblock any threads
+            # still waiting on approval (e.g. stream cancelled mid-approval).
+            if _approval_registered and _unreg_notify is not None:
+                try:
+                    _unreg_notify(session_id)
+                except Exception:
+                    logger.debug("Failed to unregister approval callback")
+            with _ENV_LOCK:
                 if old_cwd is None: os.environ.pop('TERMINAL_CWD', None)
                 else: os.environ['TERMINAL_CWD'] = old_cwd
                 if old_exec_ask is None: os.environ.pop('HERMES_EXEC_ASK', None)
@@ -515,15 +577,41 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 
     except Exception as e:
         print('[webui] stream error:\n' + traceback.format_exc(), flush=True)
+        if s is not None:
+            s.active_stream_id = None
+            s.pending_user_message = None
+            s.pending_attachments = []
+            s.pending_started_at = None
+            try:
+                s.save()
+            except Exception:
+                pass
         err_str = str(e)
         # Detect rate limit errors specifically so the client can show a helpful card
         # rather than the generic "Connection lost" message
         is_rate_limit = 'rate limit' in err_str.lower() or '429' in err_str or 'RateLimitError' in type(e).__name__
+        is_auth_error = (
+            '401' in err_str
+            or 'AuthenticationError' in type(e).__name__
+            or 'authentication' in err_str.lower()
+            or 'unauthorized' in err_str.lower()
+            or 'invalid api key' in err_str.lower()
+            or 'no cookie auth credentials' in err_str.lower()
+        )
         if is_rate_limit:
             put('apperror', {
                 'message': err_str,
                 'type': 'rate_limit',
                 'hint': 'Rate limit reached. The fallback model (if configured) was also exhausted. Try again in a moment.',
+            })
+        elif is_auth_error:
+            put('apperror', {
+                'message': err_str,
+                'type': 'auth_mismatch',
+                'hint': (
+                    'The selected model may not be supported by your configured provider. '
+                    'Run `hermes model` in your terminal to switch providers, then restart the WebUI.'
+                ),
             })
         else:
             put('apperror', {'message': err_str, 'type': 'error'})
@@ -532,6 +620,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
         with STREAMS_LOCK:
             STREAMS.pop(stream_id, None)
             CANCEL_FLAGS.pop(stream_id, None)
+            AGENT_INSTANCES.pop(stream_id, None)  # Clean up agent instance reference
 
 # ============================================================
 # SECTION: HTTP Request Handler
@@ -546,14 +635,36 @@ def cancel_stream(stream_id: str) -> bool:
     with STREAMS_LOCK:
         if stream_id not in STREAMS:
             return False
+
+        # Set WebUI layer cancel flag
         flag = CANCEL_FLAGS.get(stream_id)
         if flag:
             flag.set()
+
+        # Interrupt the AIAgent instance to stop tool execution
+        agent = AGENT_INSTANCES.get(stream_id)
+        if agent:
+            try:
+                agent.interrupt("Cancelled by user")
+            except Exception as e:
+                # Log but don't block the cancel flow
+                import logging
+                logging.getLogger(__name__).debug(
+                    f"Failed to interrupt agent for stream {stream_id}: {e}"
+                )
+        else:
+            # Agent not yet stored - cancel_event flag will be checked by agent thread
+            import logging
+            logging.getLogger(__name__).debug(
+                f"Cancel requested for stream {stream_id} before agent ready - "
+                f"cancel_event flag set, will be checked on agent startup"
+            )
+
         # Put a cancel sentinel into the queue so the SSE handler wakes up
         q = STREAMS.get(stream_id)
         if q:
             try:
                 q.put_nowait(('cancel', {'message': 'Cancelled by user'}))
             except Exception:
-                pass
+                logger.debug("Failed to put cancel event to queue")
     return True

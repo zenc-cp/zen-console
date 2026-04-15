@@ -97,12 +97,35 @@ async function loadDir(path){
     }
     if(typeof clearPreview==='function'){
       if(typeof _previewDirty!=='undefined'&&_previewDirty){
-        if(confirm('You have unsaved changes in the preview. Discard and navigate?'))clearPreview();
+        showConfirmDialog({title:t('unsaved_confirm'),message:'',confirmLabel:'Discard',danger:true,focusCancel:true}).then(ok=>{if(ok)clearPreview();});
       }else{
         clearPreview();
       }
     }
+    // Fetch git info for workspace root (non-blocking)
+    if(!path||path==='.') _refreshGitBadge();
   }catch(e){console.warn('loadDir',e);}
+}
+
+async function _refreshGitBadge(){
+  const badge=$('gitBadge');
+  if(!badge||!S.session)return;
+  try{
+    const data=await api(`/api/git-info?session_id=${encodeURIComponent(S.session.session_id)}`);
+    if(data.git&&data.git.is_git){
+      const g=data.git;
+      let text=g.branch||'git';
+      if(g.dirty>0) text+=` \u00b7 ${g.dirty}\u2206`; // middot + delta
+      if(g.behind>0) text+=` \u2193${g.behind}`;
+      if(g.ahead>0) text+=` \u2191${g.ahead}`;
+      badge.textContent=text;
+      badge.className='git-badge'+(g.dirty>0?' dirty':'');
+      badge.style.display='';
+    } else {
+      badge.style.display='none';
+      badge.textContent='';
+    }
+  }catch(e){badge.style.display='none';}
 }
 
 function navigateUp(){
@@ -151,8 +174,8 @@ function updateEditBtn(){
   const editable = _previewCurrentMode==='code'||_previewCurrentMode==='md';
   btn.style.display = editable?'':'none';
   const editing = $('previewEditArea').style.display!=='none';
-  btn.innerHTML = editing ? '&#128190; Save' : '&#9998; Edit';
-  btn.title = editing ? 'Save changes' : 'Edit this file';
+  btn.innerHTML = editing ? `&#128190; ${t('save')}` : `&#9998; ${t('edit')}`;
+  btn.title = editing ? t('save_title') : t('edit_title');
   btn.style.color = editing ? 'var(--blue)' : '';
   if(_previewDirty) btn.innerHTML = '&#128190; Save*';
 }
@@ -170,12 +193,12 @@ async function toggleEditMode(){
       _previewDirty=false;
       // Update read-only views
       if(_previewCurrentMode==='code') $('previewCode').textContent=content;
-      else $('previewMd').innerHTML=renderMd(content);
+      else { $('previewMd').innerHTML=renderMd(content); requestAnimationFrame(()=>{if(typeof renderKatexBlocks==='function')renderKatexBlocks();}); }
       $('previewEditArea').style.display='none';
       if(_previewCurrentMode==='code') $('previewCode').style.display='';
       else $('previewMd').style.display='';
-      showToast('Saved');
-    }catch(e){setStatus('Save failed: '+e.message);}
+      showToast(t('saved'));
+    }catch(e){setStatus(t('save_failed')+e.message);}
   }else{
     // Enter edit mode: populate textarea with current content
     const currentText = _previewCurrentMode==='code'
@@ -220,13 +243,14 @@ async function openFile(path){
   $('fileTree').style.display='none';
 
   _previewCurrentPath = path;
+  renderFileBreadcrumb(path);
   if(IMAGE_EXTS.has(ext)){
     // Image: load via raw endpoint, show as <img>
     showPreview('image');
     const url=`/api/file/raw?session_id=${encodeURIComponent(S.session.session_id)}&path=${encodeURIComponent(path)}`;
     $('previewImg').alt=path;
     $('previewImg').src=url;
-    $('previewImg').onerror=()=>setStatus('Could not load image');
+    $('previewImg').onerror=()=>setStatus(t('image_load_failed'));
   } else if(MD_EXTS.has(ext)){
     // Markdown: fetch text, render with renderMd, display as formatted HTML
     try{
@@ -234,7 +258,8 @@ async function openFile(path){
       showPreview('md');
       _previewRawContent = data.content;
       $('previewMd').innerHTML=renderMd(data.content);
-    }catch(e){setStatus('Could not open file');}
+      requestAnimationFrame(()=>{if(typeof renderKatexBlocks==='function')renderKatexBlocks();});
+    }catch(e){setStatus(t('file_open_failed'));}
   } else {
     // Plain code / text -- but fall back to download if server signals binary
     try{
@@ -262,6 +287,44 @@ function downloadFile(path){
   a.href=url;a.download=filename;
   document.body.appendChild(a);a.click();
   setTimeout(()=>document.body.removeChild(a),100);
-  showToast(`Downloading ${filename}\u2026`,2000);
+  showToast(t('downloading',filename),2000);
 }
 
+
+// ── Render breadcrumb for file preview mode ──────────────────────────────────
+function renderFileBreadcrumb(filePath) {
+  const bar = $('breadcrumbBar');
+  if (!bar) return;
+  bar.style.display = 'flex';
+  const upBtn = $('btnUpDir');
+  if (upBtn) upBtn.style.display = '';
+
+  bar.innerHTML = '';
+  // Root
+  const root = document.createElement('span');
+  root.className = 'breadcrumb-seg breadcrumb-link';
+  root.textContent = '~';
+  root.onclick = () => { clearPreview(); loadDir('.'); };
+  bar.appendChild(root);
+
+  const parts = filePath.split('/');
+  let accumulated = '';
+  for (let i = 0; i < parts.length; i++) {
+    const sep = document.createElement('span');
+    sep.className = 'breadcrumb-sep';
+    sep.textContent = '/';
+    bar.appendChild(sep);
+
+    accumulated += (accumulated ? '/' : '') + parts[i];
+    const seg = document.createElement('span');
+    seg.textContent = parts[i];
+    if (i < parts.length - 1) {
+      seg.className = 'breadcrumb-seg breadcrumb-link';
+      const target = accumulated;
+      seg.onclick = () => { clearPreview(); loadDir(target); };
+    } else {
+      seg.className = 'breadcrumb-seg breadcrumb-current';
+    }
+    bar.appendChild(seg);
+  }
+}

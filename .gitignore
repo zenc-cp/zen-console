@@ -25,6 +25,6 @@ full-UI.png
 # OS files
 .DS_Store
 Thumbs.db
-venv-console/
-__pycache__/
-*.pyc
+
+# Local reference clones — never committed
+docs/

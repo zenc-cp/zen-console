@@ -8,8 +8,12 @@ profile has its own workspace configuration.  State files live at
 paths are used as fallback when no profile module is available.
 """
 import json
+import logging
 import os
+import subprocess
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from api.config import (
     WORKSPACES_FILE as _GLOBAL_WS_FILE,
@@ -36,7 +40,7 @@ def _profile_state_dir() -> Path:
             d.mkdir(parents=True, exist_ok=True)
             return d
     except ImportError:
-        pass
+        logger.debug("Failed to import profiles module, using global state dir")
     return _GLOBAL_WS_FILE.parent
 
 
@@ -79,7 +83,7 @@ def _profile_default_workspace() -> str:
                 if p.is_dir():
                     return str(p)
     except (ImportError, Exception):
-        pass
+        logger.debug("Failed to load profile default workspace config")
     return str(_BOOT_DEFAULT_WORKSPACE)
 
 
@@ -88,7 +92,6 @@ def _profile_default_workspace() -> str:
 def _clean_workspace_list(workspaces: list) -> list:
     """Sanitize a workspace list:
     - Remove entries whose paths no longer exist on disk.
-    - Remove entries that look like test artifacts (webui-mvp-test, test-workspace).
     - Remove entries whose paths live inside another profile's directory
       (e.g. ~/.hermes/profiles/X/... should not appear on a different profile).
     - Rename any entry whose name is literally 'default' to 'Home' (avoids
@@ -101,18 +104,24 @@ def _clean_workspace_list(workspaces: list) -> list:
         path = w.get('path', '')
         name = w.get('name', '')
         p = Path(path).resolve() if path else Path('/')
-        # Skip test artifacts
-        if 'test-workspace' in path or 'webui-mvp-test' in path:
-            continue
         # Skip paths that no longer exist
         if not p.is_dir():
             continue
-        # Skip paths inside a named profile's directory (cross-profile leak)
+        # Skip paths inside a DIFFERENT profile's directory (cross-profile leak).
+        # Allow paths inside the CURRENT profile's own directory (e.g. test workspaces
+        # created under ~/.hermes/profiles/webui/webui-mvp-test/).
         try:
             p.relative_to(hermes_profiles)
-            continue  # it IS under profiles/ — remove it
+            # p is under ~/.hermes/profiles/ — only skip if it's under a DIFFERENT profile
+            try:
+                from api.profiles import get_active_hermes_home
+                own_profile_dir = get_active_hermes_home().resolve()
+                p.relative_to(own_profile_dir)
+                # p is under our own profile dir — keep it
+            except (ValueError, Exception):
+                continue  # under profiles/ but not our own — cross-profile leak, skip
         except ValueError:
-            pass
+            pass  # not under profiles/ at all — keep it
         # Rename confusing 'default' label to 'Home'
         if name.lower() == 'default':
             name = 'Home'
@@ -155,10 +164,10 @@ def load_workspaces() -> list:
                         json.dumps(cleaned, ensure_ascii=False, indent=2), encoding='utf-8'
                     )
                 except Exception:
-                    pass
+                    logger.debug("Failed to persist cleaned workspace list")
             return cleaned or [{'path': _profile_default_workspace(), 'name': 'Home'}]
         except Exception:
-            pass
+            logger.debug("Failed to load workspaces from %s", ws_file)
     # No profile-local file yet.
     # For the DEFAULT profile: migrate from the legacy global file (one-time cleanup).
     # For NAMED profiles: always start clean with just their own workspace.
@@ -175,7 +184,7 @@ def load_workspaces() -> list:
     return [{'path': _profile_default_workspace(), 'name': 'Home'}]
 
 
-def save_workspaces(workspaces: list):
+def save_workspaces(workspaces: list) -> None:
     ws_file = _workspaces_file()
     ws_file.parent.mkdir(parents=True, exist_ok=True)
     ws_file.write_text(json.dumps(workspaces, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -189,7 +198,7 @@ def get_last_workspace() -> str:
             if p and Path(p).is_dir():
                 return p
         except Exception:
-            pass
+            logger.debug("Failed to read last workspace from %s", lw_file)
     # Fallback: try global file
     if _GLOBAL_LW_FILE.exists():
         try:
@@ -197,17 +206,87 @@ def get_last_workspace() -> str:
             if p and Path(p).is_dir():
                 return p
         except Exception:
-            pass
+            logger.debug("Failed to read global last workspace")
     return _profile_default_workspace()
 
 
-def set_last_workspace(path: str):
+def set_last_workspace(path: str) -> None:
     try:
         lw_file = _last_workspace_file()
         lw_file.parent.mkdir(parents=True, exist_ok=True)
         lw_file.write_text(str(path), encoding='utf-8')
     except Exception:
+        logger.debug("Failed to set last workspace")
+
+
+def resolve_trusted_workspace(path: str | Path | None = None) -> Path:
+    """Resolve and validate a workspace path.
+
+    A path is trusted if it satisfies at least one of:
+      (A) It is under the user's home directory (Path.home()).
+          Works cross-platform: ~/... on Linux/macOS, C:\\Users\\... on Windows.
+      (B) It is already in the profile's saved workspace list.
+          This covers self-hosted deployments where workspaces live outside home
+          (e.g. /data/projects, /opt/workspace) — once a workspace is saved by
+          an admin, it can be reused without re-validation.
+
+    Additionally enforced regardless of (A)/(B):
+      1. The path must exist.
+      2. The path must be a directory.
+      3. The path must not be a known system root (/etc, /usr, /var, /bin, /sbin,
+         /boot, /proc, /sys, /dev, /root on Linux/macOS; Windows system dirs).
+         This prevents even admin-saved workspaces from pointing at OS internals.
+
+    None/empty path falls back to the boot-time DEFAULT_WORKSPACE, which is always
+    trusted (it was validated at server startup).
+    """
+    _BLOCKED_SYSTEM_ROOTS = {
+        # Linux / macOS
+        Path('/etc'), Path('/usr'), Path('/var'), Path('/bin'), Path('/sbin'),
+        Path('/boot'), Path('/proc'), Path('/sys'), Path('/dev'), Path('/root'),
+        Path('/lib'), Path('/lib64'), Path('/opt/homebrew'),
+    }
+
+    if path in (None, ""):
+        return Path(_BOOT_DEFAULT_WORKSPACE).expanduser().resolve()
+
+    candidate = Path(path).expanduser().resolve()
+
+    if not candidate.exists():
+        raise ValueError(f"Path does not exist: {candidate}")
+    if not candidate.is_dir():
+        raise ValueError(f"Path is not a directory: {candidate}")
+
+    # Block known system roots and their children
+    for blocked in _BLOCKED_SYSTEM_ROOTS:
+        try:
+            candidate.relative_to(blocked)
+            raise ValueError(f"Path points to a system directory: {candidate}")
+        except ValueError as e:
+            if "system directory" in str(e):
+                raise
+            # relative_to raised ValueError = candidate is NOT under blocked = safe
+
+    # (A) Trusted if under the user's home directory — cross-platform via Path.home()
+    try:
+        candidate.relative_to(Path.home().resolve())
+        return candidate
+    except ValueError:
         pass
+
+    # (B) Trusted if already in the saved workspace list — covers non-home installs
+    try:
+        saved = load_workspaces()
+        saved_paths = {Path(w["path"]).resolve() for w in saved if w.get("path")}
+        if candidate in saved_paths:
+            return candidate
+    except Exception:
+        pass
+
+    raise ValueError(
+        f"Path is outside the user home directory and not in the saved workspace "
+        f"list: {candidate}. Add it via Settings → Workspaces first."
+    )
 
 
 def safe_resolve_ws(root: Path, requested: str) -> Path:
@@ -217,7 +296,7 @@ def safe_resolve_ws(root: Path, requested: str) -> Path:
     return resolved
 
 
-def list_dir(workspace: Path, rel='.'):
+def list_dir(workspace: Path, rel: str='.'):
     target = safe_resolve_ws(workspace, rel)
     if not target.is_dir():
         raise FileNotFoundError(f"Not a directory: {rel}")
@@ -234,7 +313,7 @@ def list_dir(workspace: Path, rel='.'):
     return entries
 
 
-def read_file_content(workspace: Path, rel: str):
+def read_file_content(workspace: Path, rel: str) -> dict:
     target = safe_resolve_ws(workspace, rel)
     if not target.is_file():
         raise FileNotFoundError(f"Not a file: {rel}")
@@ -243,3 +322,45 @@ def read_file_content(workspace: Path, rel: str):
         raise ValueError(f"File too large ({size} bytes, max {MAX_FILE_BYTES})")
     content = target.read_text(encoding='utf-8', errors='replace')
     return {'path': rel, 'content': content, 'size': size, 'lines': content.count('\n') + 1}
+
+
+# ── Git detection ──────────────────────────────────────────────────────────
+
+def _run_git(args, cwd, timeout=3):
+    """Run a git command and return stdout, or None on failure."""
+    try:
+        r = subprocess.run(
+            ['git'] + args, cwd=str(cwd), capture_output=True,
+            text=True, timeout=timeout,
+        )
+        return r.stdout.strip() if r.returncode == 0 else None
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
+def git_info_for_workspace(workspace: Path) -> dict:
+    """Return git info for a workspace directory, or None if not a git repo."""
+    if not (workspace / '.git').exists():
+        return None
+    branch = _run_git(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)
+    if branch is None:
+        return None
+    # Status counts
+    status_out = _run_git(['status', '--porcelain'], workspace) or ''
+    lines = [l for l in status_out.splitlines() if l]
+    # git status --porcelain: XY format where X=index, Y=worktree
+    modified = sum(1 for l in lines if len(l) >= 2 and (l[0] in 'MAR' or l[1] in 'MAR'))
+    untracked = sum(1 for l in lines if l.startswith('??'))
+    dirty = len(lines)
+    # Ahead/behind
+    ahead = _run_git(['rev-list', '--count', '@{u}..HEAD'], workspace)
+    behind = _run_git(['rev-list', '--count', 'HEAD..@{u}'], workspace)
+    return {
+        'branch': branch,
+        'dirty': dirty,
+        'modified': modified,
+        'untracked': untracked,
+        'ahead': int(ahead) if ahead and ahead.isdigit() else 0,
+        'behind': int(behind) if behind and behind.isdigit() else 0,
+        'is_git': True,
+    }

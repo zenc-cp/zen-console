@@ -2,7 +2,7 @@
 import json, uuid, pathlib, urllib.request, urllib.error
 REPO_ROOT = pathlib.Path(__file__).parent.parent.resolve()
 
-BASE = "http://127.0.0.1:8788"  # isolated test server
+from tests._pytest_port import BASE
 
 def get(path):
     with urllib.request.urlopen(BASE + path, timeout=10) as r:
@@ -36,6 +36,7 @@ def test_index_html_served():
     assert status == 200
     assert b"sidebarResize" in raw, "Resize handle not found in HTML"
     assert b"cronCreateForm" in raw, "Cron create form not found in HTML"
+    assert b"btnHermesPanel" in raw, "Hermes control center trigger not found in HTML"
     assert b"btnExportJSON" in raw, "Export JSON button not found in HTML"
 
 def test_index_html_file_exists():

@@ -1,7 +1,1235 @@
 # Hermes Web UI -- Changelog
 
+## [v0.50.45] fix: suppress N/A source_tag in session list (#429)
+
+Feishu and WeChat sessions (and any session with an unrecognised or legacy
+`source` value in hermes-agent's state.db) were showing "N/A" or raw tag
+strings in the session list sidebar.
+
+Three fixes in `static/sessions.js`:
+
+1. `_formatSourceTag()` now returns `null` for unrecognised tags instead of
+   the raw string. Known platforms (telegram, discord, slack, feishu, weixin,
+   cli) still display their human-readable label. Unknown/legacy values are
+   silently suppressed.
+
+2. The `metaBits` push is guarded: stores the result in `_stLabel` and only
+   pushes if it is non-null. Prevents `null` or unrecognised platform names
+   from appearing in the session metadata line.
+
+3. The `[SYSTEM:]` title fallback now uses `_SOURCE_DISPLAY[s.source_tag] ||
+   'Gateway'` — the raw `s.source_tag` middle term is removed so a session
+   whose source is "N/A" does not use that as its visible title.
+
+No backend changes. The upstream issue (hermes-agent not reliably setting
+`source` for older Feishu/WeChat sessions) is tracked separately.
+
+7 new tests in `tests/test_issue429.py`. Updated 1 existing test in
+`tests/test_sprint40_ui_polish.py` to match the new guarded push pattern.
+
+- Total tests: 1202 (was 1195)
+
+## [v0.50.44] fix: code-in-table CSS sizing + markdown image rendering (#486, #487)
+
+**CSS: inline code inside table cells** (fixes #486)
+
+Inline `` `code` `` spans inside `<td>` and `<th>` cells were rendering too
+large relative to the cell height — the `.msg-body code` rule sets `12.5px`
+which sits awkward against the table's `12px` base font.
+
+Fix: added two targeted rules in `static/style.css`:
+
+    .msg-body td code,.msg-body th code { font-size:0.85em; padding:1px 4px; vertical-align:baseline; }
+    .preview-md td code,.preview-md th code { font-size:0.85em; padding:1px 4px; vertical-align:baseline; }
+
+Covers both the chat message surface (`.msg-body`) and the markdown preview
+panel (`.preview-md`).
+
+**JS renderer: `![alt](url)` image syntax** (fixes #487)
+
+Standard markdown image syntax was not handled by `renderMd()`. The `!` was
+left as a stray character and `[alt](url)` was consumed by the link pass,
+producing `! <a href="url">alt</a>` instead of an `<img>`.
+
+Fix: added an image pass to both `inlineMd()` (for images in table cells,
+list items, blockquotes, headings) and the outer `renderMd()` pipeline (for
+images in plain paragraphs):
+
+- Regex: `![alt](https?://url)` — only `http://` and `https://` URIs accepted;
+  `javascript:` and `data:` URIs cannot match.
+- Alt text passes through `esc()` — XSS-safe.
+- URL double-quotes percent-encoded to `%22` — attribute breakout prevented.
+- Reuses `.msg-media-img` class — same click-to-zoom and max-width styling as
+  agent-emitted `MEDIA:` images.
+- `img` added to `SAFE_TAGS` allowlist so the generated `<img>` is not escaped.
+- In `inlineMd()`: image pass runs while the `_code_stash` is still active,
+  so `![alt](url)` inside a backtick span stays protected and is never rendered
+  as an image. A new `_img_stash` (`\x00G`) protects rendered `<img>` tags
+  from the autolink pass touching `src=` values.
+
+**Tests**
+
+45 new tests in `tests/test_issue486_487.py`:
+- 13 CSS source checks and rendering tests for #486
+- 22 JS source checks and rendering tests for #487
+- 10 combination edge cases (code + image + link all in same table)
+
+- Total tests: 1195 (was 1150)
+
+## [v0.50.43] fix: markdown link rendering + KaTeX CSP fonts
+
+**Markdown link rendering — `renderMd()` in `static/ui.js`** (PR #475, fixes #470)
+
+Three related bugs fixed:
+
+1. **Double-linking via autolink pass** — `[label](url)` was converted to `<a href="...">`, then the bare-URL autolink pass re-matched the URL sitting inside `href="..."` and wrapped it in a second `<a>` tag. Fixed with three stash/restore layers: `\x00L` (inlineMd labeled links), `\x00A` (existing `<a>` tags before outer link pass), `\x00B` (existing `<a>` tags before autolink pass).
+
+2. **`esc()` on `href` values corrupts query strings** — `esc()` is HTML-entity encoding; applying it to URLs converted `&` → `&amp;` in query strings. Removed `esc()` from href values in all three locations. Display text (link labels) still uses `esc()` for XSS safety. `"` in URLs replaced with `%22` (URL encoding) to close the attribute-injection vector identified during review.
+
+3. **Backtick code spans inside `**bold**` rendered as `&lt;code&gt;`** — `esc()` was applied to code spans after bold/italic processing. Added `\x00C` stash to protect backtick spans in `inlineMd()` before bold/italic regex runs.
+
+**Security audit:** `javascript:` injection blocked by `https?://` prefix requirement. `"` attribute breakout fixed by `.replace(/"/g, '%22')`. Label/display text still HTML-escaped.
+
+24 tests in `tests/test_issue470.py`.
+
+**KaTeX CSP font-src** (fixes #477)
+
+`api/helpers.py` CSP `font-src` now includes `https://cdn.jsdelivr.net` so KaTeX math rendering fonts load correctly. Previously ~50 CSP font-blocking errors appeared in the console on any page with math content. The CDN was already allowed in `script-src` and `style-src` for KaTeX JS/CSS — this extends the same allowance to fonts.
+
+3 tests in `tests/test_issue477.py`.
+
+- Total tests: 1150 (was 1130)
+
+## [v0.50.42] fix: session display + model UX polish (sprint 42)
+
+**Context indicator always shows latest usage** (PR #471, fixes #437)
+The context ring/indicator in the composer footer was reading token counts and cost
+from the stored session snapshot with `||` — meaning stale non-zero values from
+previous turns always won over a fresh `0` from the current turn. Replaced all six
+field merges with a `_pick(latest, stored, dflt)` helper that correctly prefers the
+latest usage when it's a real value (including `0`).
+
+**System prompt no longer leaks as gateway session title** (PR #472, fixes #441)
+Telegram, Discord, and CLI gateway sessions inject a system message before any user
+turn. When the session title is set from this message, the sidebar shows
+`[SYSTEM: The user has inv...` instead of a meaningful name. Added a guard in
+`_renderOneSession()`: if `cleanTitle` starts with `[SYSTEM:`, replace it with the
+platform display name (`Telegram session`, `Discord session`, etc.).
+
+**Thinking/reasoning panel persists across page reload** (PR #473, fixes #427)
+The full chain-of-thought from Claude, Gemini, and DeepSeek thinking models was lost
+after streaming completed and on every page reload. Two-part fix:
+- `api/streaming.py`: `on_reasoning()` now accumulates `_reasoning_text`; before the
+  session is serialised at stream end, `_reasoning_text` is injected into the last
+  assistant message so it's stored in the session JSON
+- `static/messages.js`: in the `done` SSE handler, `reasoningText` is also patched
+  onto the last assistant message as a belt-and-suspenders client-side fallback
+
+**Custom model ID input in model picker** (PR #474, fixes #444)
+Users who need a model not in the curated list (~30 models) can now type any model
+ID directly in the dropdown. A text input at the bottom of the model picker lets
+users enter any string (e.g. `openai/gpt-5.4`, `deepseek/deepseek-r2`, or any
+provider-prefixed ID) and press Enter or click + to use it immediately.
+i18n keys added to en, es, zh.
+
+- Total tests: 1130 (was 1117)
+
+## [v0.50.41] feat(ui): render MEDIA: images inline in web UI chat (fixes #450)
+
+When the agent outputs `MEDIA:<path>` tokens — screenshots from the browser tool,
+generated images, vision outputs — the web UI now renders them **inline in the chat**,
+the same way Claude.ai handles images. No more relaying screenshots through Telegram.
+
+**How it works:**
+- Local image path (`MEDIA:/tmp/screenshot.png`): rendered as `<img>` via `/api/media?path=...`
+- HTTP(S) URL to image (`MEDIA:https://example.com/img.png`): `<img>` directly from the URL
+- Non-image file (`MEDIA:/tmp/report.pdf`): styled download link (📎 filename)
+- Click any inline image to toggle full-size zoom
+
+**New endpoint — `GET /api/media?path=<encoded-path>`:**
+- Path allowlist: `~/.hermes/`, `/tmp/`, active workspace — covers all agent output locations
+- Auth-gated: requires valid session cookie when auth is enabled
+- Inline image MIME types: PNG, JPEG, GIF, WebP, BMP
+- SVG always served as download attachment (XSS prevention)
+- RFC 5987-compliant `Content-Disposition` headers (handles Unicode filenames)
+- `Cache-Control: private, max-age=3600`
+
+**Security:**
+- Original version had `~` (entire home dir) as an allowed root — **fixed** by independent reviewer
+- Restricted to `~/.hermes/`, `/tmp/`, and active workspace only
+- `Path.resolve()` + `commonpath` checks prevent symlink traversal
+
+**Changes:**
+- `api/routes.py`: `_handle_media()` handler + `/api/media` route
+- `static/ui.js`: `MEDIA:` stash in `renderMd()` (runs before `fence_stash`, stash token `\x00D`)
+- `static/style.css`: `.msg-media-img` (480px max-width, zoom-on-click), `.msg-media-link`
+- `tests/test_media_inline.py`: 19 new tests (static analysis + integration)
+
+- Total tests: 1117 (was 1098)
+
+## [v0.50.40] feat: session UI polish + parallel test isolation
+
+**Session sidebar improvements:**
+- `static/sessions.js` + `style.css`: Hide session timestamps to give titles full available width — no more title truncation from inline timestamps (PR #449)
+- `static/style.css`: Active session title now uses `var(--gold)` theme variable instead of hardcoded `#e8a030` — adapts correctly across all 7 themes (PR #451, fixes #440)
+- `api/models.py` + `api/gateway_watcher.py`: Return `None` instead of the string `'unknown'` for missing gateway session model — Telegram sessions no longer show `telegram · unknown` (PR #452, fixes #443)
+- `static/style.css` + `static/sessions.js`: Mute Telegram badge from saturated `#0088cc` to `rgba(0, 136, 204, 0.55)`. Add `_formatSourceTag()` helper mapping platform IDs to display names (`telegram` → `via Telegram`) (PR #453, fixes #442)
+
+**Bug fixes:**
+- `api/config.py` `resolve_model_provider()`: Strip provider prefix from model ID when a custom `base_url` is configured (`openai/gpt-5.4` → `gpt-5.4`) — fixes broken chats after switching to a custom endpoint (PR #454, fixes #433)
+- `static/panels.js` `switchToProfile()`: Apply profile default workspace to new session created during profile switch — workspace chip no longer shows "No active workspace" after switching profiles mid-conversation (PR #455, fixes #424)
+
+**Test infrastructure:**
+- `tests/conftest.py` + `tests/_pytest_port.py` (new): Auto-derive unique port and state dir per worktree from repo path hash (range 20000-29999). Running pytest in two worktrees simultaneously no longer causes port conflicts. All 43 test files updated from hardcoded `BASE = "http://127.0.0.1:8788"` to `from tests._pytest_port import BASE` (PR #456)
+
+- Total tests: 1098 (was 1078)
+
+## [v0.50.39] fix: orphan gateway sessions + first-password-enablement session continuity
+
+Two bug fixes:
+
+**PR #423 — Fix orphan gateway sessions in sidebar (@aronprins, fix by maintainer)**
+`gateway_watcher.py`'s `_get_agent_sessions_from_db()` was missing the
+`HAVING COUNT(m.id) > 0` clause that `get_cli_sessions()` already had. Sessions
+with no messages (e.g. created then abandoned before any turns) would appear in the
+sidebar via the SSE watcher stream even after the initial page load filtered them out.
+One-line SQL fix applied to both query paths.
+
+**PR #434 — First-password-enablement session continuity (@SaulgoodMan-C)**
+When a user enables a password for the first time via POST `/api/settings`,
+the current browser session was being terminated — requiring the user to log in
+again immediately after setting their password. Fix: the response now includes
+`auth_enabled`, `logged_in`, and `auth_just_enabled` fields, and issues a
+`hermes_session` cookie when auth is first enabled, so the browser remains logged in.
+Also: legacy `assistant_language` key is now dropped from settings on next save.
+New i18n keys for password replacement/keep-existing states (en, es, de, zh, zh-Hant).
+
+- `api/config.py`: `_SETTINGS_LEGACY_DROP_KEYS` removes `assistant_language` on load
+- `api/routes.py`: first-password-enable session continuity with `auth_just_enabled` flag
+- `static/panels.js`: `_setSettingsAuthButtonsVisible()` + `_applySavedSettingsUi()` helpers
+- `static/i18n.js`: password state i18n keys across 5 locales
+- `tests/test_sprint45.py`: 3 new integration tests (auth continuity + legacy key cleanup)
+
+- Total tests: 1078 (was 1075)
+
+
+## [v0.50.38] feat: mobile nav cleanup, Prism syntax highlighting, zh-CN/zh-Hant i18n
+
+Three community contributions combined:
+
+**PR #425 — Remove mobile bottom nav (@aronprins)**
+The fixed iOS-style bottom navigation bar on phones has been removed. The sidebar drawer
+tabs already handle all navigation — the bottom nav was redundant and consumed ~56px of
+vertical chat space. `test_mobile_layout.py` updated with `test_mobile_bottom_nav_removed()`
+and new sidebar nav coverage tests.
+
+**PR #426 — Prism syntax highlighting with light + dark theme token colors (@GiggleSamurai)**
+Fenced code blocks now emit `class="language-{lang}"` on `<code>` elements, enabling Prism's
+autoloader to apply token-level syntax highlighting. Added 36-line `:root[data-theme="light"]`
+token color overrides scoped to light theme only; dark/dim/monokai/nord themes unaffected.
+Background guard uses `var(--code-bg) !important` to prevent Prism's dark background from
+overriding theme variables. 2 new regression tests in `test_issue_code_syntax_highlight.py`.
+
+**PR #428 — zh-CN/zh-Hant i18n hardening (@vansour)**
+Pluggable `resolvePreferredLocale()` function with smart zh-CN/zh-SG/zh-TW/zh-HK variant
+mapping. Full zh-Simplified and zh-Traditional locale blocks added to `i18n.js`. Login page
+locale routing updated in `api/routes.py` (`_resolve_login_locale_key()` helper). Hardcoded
+strings in `panels.js` cron UI extracted to i18n keys. 3 new test files:
+`test_chinese_locale.py`, `test_language_precedence.py`, `test_login_locale.py`.
+
+- Total tests: 1075 (was 1063)
+
+## [v0.50.37] fix(onboarding): skip wizard when Hermes is already configured
+
+Fixes #420 — existing Hermes users with a valid `config.yaml` were shown the first-run
+onboarding wizard on every WebUI load because the only completion gate was
+`settings.onboarding_completed` in the WebUI's own settings file. Users who configured
+Hermes via the CLI before the WebUI existed had no such flag, so the wizard always fired
+and could silently overwrite their working config.
+
+**Changes:**
+1. `api/onboarding.py` `get_onboarding_status()`: auto-complete when `config.yaml` exists
+   AND `chat_ready=True`. Existing configured users are never shown the wizard.
+2. `api/onboarding.py` `apply_onboarding_setup()`: refuse to overwrite an existing
+   `config.yaml` without `confirm_overwrite=True` in the request body. Returns
+   `{error: "config_exists", requires_confirm: true}` for the frontend to handle.
+3. `static/index.html`: "Skip setup" button added to wizard footer — users are never
+   trapped in the wizard.
+4. `static/onboarding.js`: `skipOnboarding()` calls `/api/onboarding/complete` without
+   modifying config, then closes the overlay.
+5. `static/boot.js`: Escape key now dismisses the onboarding overlay.
+6. `static/i18n.js`: `onboarding_skip` / `onboarding_skipped` keys added to en + es locales.
+7. `tests/test_onboarding_existing_config.py`: 8 new unit tests covering gate logic and
+   overwrite guard.
+
+- Total tests: 1063 (was 1055)
+
+
+## [v0.50.36] fix: workspace list cleaner — allow own-profile paths, remove brittle string filter
+
+Two bugs in `_clean_workspace_list()` caused workspace additions to silently disappear on the next `load_workspaces()` call, breaking `test_workspace_add_no_duplicate` and `test_workspace_rename` (and potentially causing real-world workspace list corruption):
+
+**Bug 1 — Brittle string filter removed:** `if 'test-workspace' in path or 'webui-mvp-test' in path: continue` dropped any workspace path containing those substrings. In the test server, `TEST_WORKSPACE` is `~/.hermes/profiles/webui/webui-mvp-test/test-workspace`, so every workspace added during tests was silently discarded on the next `load_workspaces()` call. The `p.is_dir()` check already handles genuinely non-existent paths — the string filter was redundant and harmful.
+
+**Bug 2 — Cross-profile filter was too broad:** `if p is under ~/.hermes/profiles/: skip` was designed to block cross-profile workspace leakage, but it also removed paths under the *current* profile's own directory (e.g. `~/.hermes/profiles/webui/...`). Fixed: now only skips paths under `profiles/` that are NOT under the current profile's own `hermes_home`.
+
+- `api/workspace.py`: remove string-match filter; fix cross-profile check to allow own-profile paths
+- All 1055 tests now pass (was 1053 pass + 2 fail)
+
+## [v0.50.35] fix: workspace trust boundary — cross-platform, multi-workspace support
+
+v0.50.34's workspace trust check was too restrictive: it required all workspaces to be under `DEFAULT_WORKSPACE` (/home/hermes/workspace), which blocked every profile-specific workspace (~/CodePath, ~/hermes-webui-public, ~/WebUI, ~/Camanji, etc.) and prevented switching between workspaces at all.
+
+Replaced with a three-layer model that works cross-platform and supports multiple workspaces per profile:
+
+1. **Blocklist** — `/etc`, `/usr`, `/var`, `/bin`, `/sbin`, `/boot`, `/proc`, `/sys`, `/dev`, `/root`, `/lib`, `/lib64`, `/opt/homebrew` always rejected, closing the original CVSS 8.8 vulnerability
+2. **Home-directory check** — any path under `Path.home()` is trusted; `Path.home()` is cross-platform (`~/...` on Linux/macOS, `C:\\Users\\...` on Windows); allows all profile workspaces simultaneously since they don't need to share a single ancestor
+3. **Saved-workspace escape hatch** — paths already in the profile's saved workspace list are trusted regardless of location, covering self-hosted deployments with workspaces outside home (`/data/projects`, `/opt/workspace`, etc.)
+
+- `api/workspace.py`: rewritten `resolve_trusted_workspace()` with the three-layer model
+- `tests/test_sprint3.py`: updated error-message assertions from `"trusted workspace root"` → `"outside"` (covers both old and new error strings)
+- 1053 tests total (unchanged)
+
+## [v0.50.34] fix(workspace): restrict session workspaces to trusted roots [SECURITY] (#415)
+
+Session creation, update, chat-start, and workspace-add endpoints accepted arbitrary caller-supplied workspace paths. An authenticated caller could repoint a session to any directory the process could access, then use normal file read/write APIs to operate on attacker-chosen locations. CVSS 8.8 High (AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H).
+
+- `api/workspace.py`: new `resolve_trusted_workspace(path)` helper — resolves path, checks existence + is_dir, enforces `path.relative_to(_BOOT_DEFAULT_WORKSPACE)` containment; requests outside the WebUI workspace root fail with 400
+- `api/routes.py`: apply `resolve_trusted_workspace()` to all four entry points — `POST /api/session/new`, `POST /api/session/update`, `POST /api/chat/start` (workspace override), `POST /api/workspaces/add`
+- `tests/test_sprint3.py`, `tests/test_sprint5.py`: regression tests for rejected outside-root paths on all four entry points; existing workspace tests updated to use trusted child directories
+- `tests/test_sprint1.py`, `tests/test_sprint4.py`, `tests/test_sprint13.py`: aligned to new trusted-root contract
+- Fix: use `_BOOT_DEFAULT_WORKSPACE` (respects `HERMES_WEBUI_DEFAULT_WORKSPACE` env for test isolation) rather than `_profile_default_workspace()` (reads agent terminal.cwd which may differ)
+- Original PR by @Hinotoi-agent (cherry-picked; branch was 6 commits behind master)
+- 1053 tests total (up from 1051; 2 pre-existing test_sprint5 isolation failures on master, not introduced by this PR)
+
+## [v0.50.33] fix: workspace panel close button — no duplicate X on desktop, mobile X respects file preview (#413)
+
+**Bug 1 — Duplicate X on desktop:** `#btnClearPreview` (the X icon) was always visible regardless of panel state, so desktop browse mode showed both the chevron collapse button and the X simultaneously. Fixed in `syncWorkspacePanelUI()`: on non-compact (desktop) viewports, `clearBtn.style.display` is set to `none` when no file preview is open, and cleared (shown) when a preview is active.
+
+**Bug 2 — Mobile X collapsed the whole panel instead of dismissing the file:** `.mobile-close-btn` was wired to `closeWorkspacePanel()` directly, bypassing the two-step close logic. Fixed by changing `onclick` to `handleWorkspaceClose()`, which calls `clearPreview()` first if a file is open, and falls through to `closeWorkspacePanel()` otherwise.
+
+**Also:** widened the `test_server_delete_invalidates_index` window from 600 → 1200 chars to accommodate the session_id validation guards added in v0.50.32 (#412).
+
+- `static/boot.js`: `syncWorkspacePanelUI()` sets `clearBtn.style.display` based on `hasPreview` when `!isCompact`
+- `static/index.html`: `.mobile-close-btn` onclick changed from `closeWorkspacePanel()` to `handleWorkspaceClose()`
+- `tests/test_sprint44.py`: 10 new regression tests covering both fixes
+- `tests/test_mobile_layout.py`: updated to accept `handleWorkspaceClose()` as valid onclick
+- `tests/test_regressions.py`: widened delete handler window to 1200 chars
+- 1051 tests total (up from 1041)
+
+## [v0.50.32] fix(sessions): validate session_id before deleting session files [SECURITY] (#409)
+
+`/api/session/delete` accepted arbitrary `session_id` values from the request body and built the delete path directly as `SESSION_DIR / f"{sid}.json"`. Because pathlib discards the prefix when `sid` is an absolute path, an attacker could supply `/tmp/victim` and cause the server to unlink `victim.json` outside the session store. Traversal-style values (`../../etc/target`) were also accepted. CVSS 8.1 High (AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:H).
+
+- `api/routes.py`: validate `session_id` against `[0-9a-z_]+` allowlist (covers `uuid4().hex[:12]` WebUI IDs and `YYYYMMDD_HHMMSS_hex` CLI IDs) before path construction; resolve candidate path and enforce `path.relative_to(SESSION_DIR)` containment before unlinking; only invalidate session index on successful deletion path, not on rejected requests
+- `tests/test_sprint3.py`: 2 new regression tests — absolute-path payload rejected and file preserved, traversal payload rejected and file preserved
+- Original PR by @Hinotoi-agent (cherry-picked; branch was 4 commits behind master)
+- 1041 tests total (up from 1039)
+
+## [v0.50.31] fix: delegate all live model fetching to agent's provider_model_ids()
+
+`_handle_live_models()` in `api/routes.py` previously maintained its own per-provider fetch logic and returned `not_supported` for Anthropic, Google, and Gemini. Now it delegates entirely to the agent's `hermes_cli.models.provider_model_ids()` — the single authoritative resolver — and `_fetchLiveModels()` in `ui.js` no longer skips any provider.
+
+**What each provider now returns (live data where credentials are present, static fallback otherwise):**
+- `anthropic` — live from `api.anthropic.com/v1/models` (API key or OAuth token with correct beta headers)
+- `copilot` — live from `api.githubcopilot.com/models` with required Copilot headers
+- `openai-codex` — Codex OAuth endpoint → `~/.codex/` cache → `DEFAULT_CODEX_MODELS`
+- `nous` — live from Nous inference portal
+- `deepseek`, `kimi-coding` — generic OpenAI-compat `/v1/models`
+- `opencode-zen`, `opencode-go` — OpenCode live catalog
+- `openrouter` — curated static list (live returns 300+ which floods the picker)
+- `google`, `gemini`, `zai`, `minimax` — static list (non-standard or Anthropic-compat endpoints)
+- All others — graceful static fallback from `_PROVIDER_MODELS`
+
+The hardcoded lists in `_PROVIDER_MODELS` remain as credential-missing / network-unavailable fallbacks. `api/routes.py` shrank by ~100 lines. Updated 2 tests to reflect the improved behavior.
+
+- 1039 tests total (up from 1038)
+
+## [v0.50.30] fix: openai-codex live model fetch routes through agent's get_codex_model_ids()
+
+`_handle_live_models()` was grouping `openai-codex` with `openai` and sending `GET https://api.openai.com/v1/models` — which returns 403 because Codex auth is OAuth-based via `chatgpt.com`, not a standard API key. The live fetch silently failed, so users only ever saw the hardcoded static list.
+
+- `api/routes.py`: dedicated early-return branch for `openai-codex` that calls `hermes_cli.codex_models.get_codex_model_ids()` — the same resolver the agent CLI uses. Resolution order: live Codex API (if OAuth token available, hits `chatgpt.com/backend-api/codex/models`) → `~/.codex/` local cache (written by the Codex CLI) → `DEFAULT_CODEX_MODELS` hardcoded fallback. Users with a valid Codex session now get their exact subscription model list including any models not in the hardcoded list.
+- `api/routes.py`: improved label generation for Codex model IDs (e.g. `gpt-5.4-mini` → `GPT 5.4 Mini`)
+- `tests/test_opencode_providers.py`: structural regression test verifying the dedicated `openai-codex` branch exists and calls `get_codex_model_ids()`
+- 1038 tests total (up from 1037)
+
+## [v0.50.29] fix: correct tool call card rendering on session load after context compaction (closes #401) (#402)
+
+- `static/sessions.js`: replace the flat B9 filter in `loadSession()` with a full sanitization pass that builds `origIdxToSanitizedIdx` — each `session.tool_calls[].assistant_msg_idx` is remapped to the new sanitized-array position as messages are filtered; for tool calls whose empty-assistant host was filtered out, they attach to the nearest prior kept assistant
+- `static/sessions.js`: set `S.toolCalls=[]` instead of pre-filling from session-level `tool_calls` — this lets `renderMessages()` use its fallback derivation from per-message `tool_calls` (which already carry correct indices into the sanitized message array); the fix eliminates the "200+ tool cards all on the wrong message" symptom on context-compacted session load
+- `tests/test_issue401.py`: 8 regression tests — 4 static structural checks and 4 behavioural Node.js tests covering index remapping, multiple consecutive empty assistants, no-filtering pass-through, and `tool`-role message exclusion
+- Original PR by @franksong2702 (cherry-picked onto master; branch was 31 commits behind)
+- 1037 tests total (up from 1029)
+
+## [v0.50.28] fix: expand openai-codex model catalog to match DEFAULT_CODEX_MODELS
+
+`_PROVIDER_MODELS["openai-codex"]` only listed `codex-mini-latest`, so profiles using the `openai-codex` provider (e.g. a CodePath profile with `default: gpt-5.4`) showed only one entry in the model dropdown. Updated to mirror the agent's authoritative `DEFAULT_CODEX_MODELS` list: `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, `gpt-5.2-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`, `codex-mini-latest`. Added 2 regression tests.
+
+- 1029 tests total (up from 1027)
+
+## [v0.50.27] feat: relative time labels in session sidebar (#394)
+
+- `static/sessions.js`: new `_sessionCalendarBoundaries()` (DST-safe via `new Date(y,m,d)` construction), `_localDayOrdinal()`, `_formatSessionDate()` (includes year for dates from prior years); `_formatRelativeSessionTime()` now uses calendar midnight boundaries consistent with `_sessionTimeBucketLabel()` — no more label/bucket mismatch; all relative time strings call `t()` for localization; meta row only appended when non-empty (removes redundant group-header fallback); dead `ONE_DAY` constant removed
+- `static/style.css`: add `session-item.active .session-title{color:#1a5a8a}` to light-theme block (fixes active title color in light mode)
+- `static/i18n.js`: 11 new i18n keys (`session_time_*`) in both English and Spanish locale blocks; callable keys use arrow-function pattern consistent with existing `n_messages`
+- `tests/test_session_sidebar_relative_time.py`: 5 tests — structural presence checks, behavioral Node.js tests via subprocess (yesterday/week boundary correctness, `just now` threshold, year-in-date for old sessions, full i18n key coverage for en+es)
+- Original PR by @Jordan-SkyLF (two-pass review: blocking issues fixed in second commit)
+- 1027 tests total (up from 1022)
+
+## [v0.50.26] fix(sessions): redact sensitive titles in session list and search responses [SECURITY] (#400)
+
+- `api/routes.py`: apply `_redact_text()` to session titles in all four response paths — `/api/sessions` merged list, `/api/sessions/search` empty-q, title-match, and content-match; use `dict(s)` copy before mutating to avoid corrupting the in-memory session cache
+- `tests/test_session_summary_redaction.py`: 2 integration tests verifying `sk-` prefixed secrets in session titles are redacted from both list and search endpoint responses
+- Original PR by @Hinotoi-agent (note: fix commit had a display artifact — `sk-` prefix was visually rendered as `***` in terminal output but the actual bytes were correct and the token was recognized by the redaction engine)
+- 1022 tests total (up from 1020)
+
+## [v0.50.25] Multi-PR batch: mobile scroll, import timestamps, profile security, mic fallback
+
+### fix: restore mobile chat scrolling and drawer close (#397)
+- `static/style.css`: `min-height:0` on `.layout` and `.main` (flex shrink chain fix); `-webkit-overflow-scrolling:touch`, `touch-action:pan-y`, `overscroll-behavior-y:contain` on `.messages`
+- `static/boot.js`: call `closeMobileSidebar()` on new-conversation button and Ctrl+K shortcut so the transcript is visible immediately after starting a chat
+- `tests/test_mobile_layout.py`: 41 new lines covering CSS fixes and both JS call sites
+- Original PR by @Jordan-SkyLF
+
+### fix: preserve imported session timestamps (#395)
+- `api/models.py`: `Session.save(touch_updated_at=True)` — new flag; `import_cli_session()` accepts `created_at`/`updated_at` kwargs and saves with `touch_updated_at=False`
+- `api/routes.py`: extract `created_at`/`updated_at` from `get_cli_sessions()` metadata and forward to import; post-import save also uses `touch_updated_at=False`
+- `tests/test_gateway_sync.py`: +53 lines — integration test verifying imported session keeps original timestamp and sorts correctly; also fix session file cleanup in test finally block
+- Original PR by @Jordan-SkyLF
+
+### fix(profiles): block path traversal in profile switch and delete flows (#399) [SECURITY]
+- `api/profiles.py`: new `_resolve_named_profile_home(name)` — validates name via `^[a-z0-9][a-z0-9_-]{0,63}$` regex then enforces path containment via `candidate.resolve().relative_to(profiles_root)`; use in `switch_profile()`
+- `api/profiles.py`: add `_validate_profile_name()` call to `delete_profile_api()` entry
+- `api/routes.py`: add `_validate_profile_name()` at HTTP handler level for both `/api/profile/switch` and `/api/profile/delete`
+- `tests/test_profile_path_security.py`: 3 new tests — traversal rejected, valid name passes (cherry-picked from @Hinotoi-agent's PR, which was 62 commits behind master)
+
+### feat: add desktop microphone transcription fallback (#396)
+- `static/boot.js`: detect `_canRecordAudio`; keep mic button enabled when MediaRecorder available even without SpeechRecognition; full MediaRecorder recording → `/api/transcribe` fallback path with proper cleanup and error handling
+- `api/upload.py`: add `transcribe_audio()` helper — temp file, calls transcription_tools, always cleans up
+- `api/routes.py`: add `/api/transcribe` POST handler — CSRF-protected, auth-gated, 20MB limit
+- `api/helpers.py`: change `Permissions-Policy` `microphone=()` → `microphone=(self)` (required for getUserMedia)
+- `tests/test_voice_transcribe_endpoint.py`: 87 new lines (3 tests with mocked transcription)
+- `tests/test_sprint19.py`: regression guard for microphone Permissions-Policy
+- `tests/test_sprint20.py`: 3 updated tests for new fallback capability checks
+- Original PR by @Jordan-SkyLF
+
+- 1020 tests total (up from 1003)
+
+## [v0.50.24] feat: opt-in chat bubble layout (closes #336)
+
+- `api/config.py`: Add `bubble_layout` bool to `_SETTINGS_DEFAULTS` (default `False`) and `_SETTINGS_BOOL_KEYS` — new setting is opt-in, server-persisted, and coerced to bool on save
+- `static/style.css`: 11 lines of CSS-only bubble layout — user rows `align-self:flex-end` / max-width 75%, assistant rows `flex-start`, all gated on `body.bubble-layout` class so the default full-width canvas is untouched; 700px responsive rule widens to 92%
+- `static/boot.js`: Apply `body.bubble-layout` class from settings on page load; explicitly remove the class in the catch path so the feature stays off on API failure
+- `static/panels.js`: Load checkbox state in `loadSettingsPanel`; write `body.bubble_layout` in `saveSettings` and immediately toggle `body.bubble-layout` class for live preview without a page reload
+- `static/index.html`: Checkbox in the Appearance settings group, positioned between Show token usage and Show agent sessions
+- `static/i18n.js`: English label + description keys; Spanish translations included in the same PR
+- `tests/test_issue336.py`: 22 new tests covering config registration, JS class management in boot and panels, CSS selectors, HTML structure, i18n coverage for en+es, and API round-trip (default false, persist true/false, bool coercion)
+- 1003 tests total (up from 981)
+
+## [v0.50.23] Add OpenCode Zen and Go provider support (fixes #362)
+
+- `api/config.py`: Add `opencode-zen` and `opencode-go` to `_PROVIDER_DISPLAY` — providers now show human-readable names in the UI instead of raw IDs
+- `api/config.py`: Add full model catalogs for both providers to `_PROVIDER_MODELS` — Zen (pay-as-you-go credits, 32 models) and Go (flat-rate $10/month, 7 models) now show the correct model list in the dropdown instead of falling through to the unknown-provider fallback
+- `api/config.py`: Add `OPENCODE_ZEN_API_KEY` / `OPENCODE_GO_API_KEY` to the env-var fallback detection path — providers are correctly detected as authenticated when keys are set in `.env`
+- `tests/test_opencode_providers.py`: 6 new tests covering display registration, model catalog registration, and env-var detection for both providers
+- 985 tests total (up from 979)
+
+## [v0.50.22] Onboarding unblocked for reverse proxy / SSH tunnel deployments (fixes #390)
+
+- `api/routes.py`: Onboarding setup endpoint now reads `X-Forwarded-For` and `X-Real-IP` headers before falling back to raw socket IP — reverse proxy (nginx/Caddy/Traefik) and SSH tunnel users are no longer incorrectly blocked
+- Added `HERMES_WEBUI_ONBOARDING_OPEN=1` env var escape hatch for operators on remote servers who control network access themselves
+- Error message now includes the env var hint so users know how to unblock themselves
+- 18 new tests covering all IP resolution paths (`TestOnboardingIPLogic`, `TestOnboardingSetupEndpoint`)
+
 > Living document. Updated at the end of every sprint.
 > Repository: https://github.com/nesquena/hermes-webui
+
+---
+
+## [v0.50.21] Live reasoning, tool progress, and in-flight session recovery (PR #367)
+
+- **Durable inflight reload recovery** (`static/ui.js`, `static/messages.js`): `saveInflightState` / `loadInflightState` / `clearInflightState` backed by `localStorage` (`hermes-webui-inflight-state` key, per-session, 10-minute TTL). Snapshots are saved on every token, tool event, and tool completion, and cleared when the run ends/errors/cancels. On a full page reload with an active stream, `loadSession()` hydrates from the snapshot before calling `attachLiveStream(..., {reconnecting:true})` — partial messages, live tool cards, and reasoning text all survive the reload.
+- **Live reasoning cards during streaming** (`static/ui.js`, `static/messages.js`): The generic thinking spinner now upgrades to a live reasoning card when the backend streams reasoning text. `_thinkingMarkup(text)` and `updateThinking(text)` centralize the markup so the spinner and card share the same DOM slot. Works with models that emit reasoning via the agent's `reasoning_callback` or `tool_progress_callback`.
+- **`tool_complete` SSE events** (`api/streaming.py`, `static/messages.js`): Tool progress callback now accepts the current agent signature `on_tool(*cb_args, **cb_kwargs)` — handles both the old 3-arg `(name, preview, args)` form and the new 4-arg `(event_type, name, preview, args)` form. `tool.completed` events transition live tool cards from running to done cleanly.
+- **In-flight session state stable across switches** (`static/messages.js`, `static/sessions.js`): `attachLiveStream` refactored out of `send()` into a standalone function; partial assistant text mirrored into `INFLIGHT` state on every token; `data-live-assistant` DOM anchor preserved across `renderMessages()` calls so switching away and back doesn't lose or duplicate live output.
+- **Reload recovery** (`api/models.py`, `api/routes.py`, `api/streaming.py`, `static/sessions.js`): `active_stream_id`, `pending_user_message`, `pending_attachments`, and `pending_started_at` now persisted on the session object before streaming starts and cleared on completion (or exception). `/api/session` returns these fields. After a page reload or session switch, `loadSession()` detects `active_stream_id` and calls `attachLiveStream(..., {reconnecting:true})` to reattach to the live SSE stream.
+- **Session-scoped message queue** (`static/ui.js`, `static/messages.js`): Global `MSG_QUEUE` replaced with `SESSION_QUEUES` keyed by session ID. Queued follow-up messages are associated with the session they were typed in and only drained when that session becomes idle — no cross-session bleed.
+- **`newSession()` idle reset** (`static/sessions.js`): Sets `S.busy=false`, `S.activeStreamId=null`, clears the cancel button, resets composer status — ensures a fresh chat is immediately usable even if another session's stream is still running.
+- **Todos survive session reload** (`static/panels.js`): `loadTodos()` now reads from `S.session.messages` (raw, includes tool-role messages) rather than `S.messages` (filtered display), so todo state reconstructed from tool outputs survives reloads.
+  - 12 new regression tests in `tests/test_regressions.py`; 961 tests total (up from 949)
+
+## [v0.50.20] Silent error fix, stale model cleanup, live model fetching (fixes #373, #374, #375)
+
+### Fix: Chat no longer silently swallows agent failures (fixes #373)
+
+- **`api/streaming.py`**: After `run_conversation()` completes, the server now checks whether the agent produced any assistant reply. If not (e.g., auth error swallowed internally, model unavailable, network timeout), it emits an `apperror` SSE event with a clear message and type (`auth_mismatch` or `no_response`) instead of silently emitting `done`. A `_token_sent` flag tracks whether any streaming tokens were sent.
+- **`static/messages.js`**: The `done` handler has a belt-and-suspenders guard — if `done` arrives but no assistant message exists in the session (the `apperror` path should usually catch this first), an inline "**No response received.**" message is shown. The `apperror` handler now also recognises the new `no_response` type with a distinct label.
+
+### Cleanup: Remove stale OpenAI models from default list (fixes #374)
+
+- **`api/config.py`**: `gpt-4o` and `o3` removed from `_FALLBACK_MODELS` and `_PROVIDER_MODELS["openai"]`. Both are superseded by newer models already in the list (`gpt-5.4-mini` for general use, `o4-mini` for reasoning). The Copilot provider list retains `gpt-4o` as it remains available via the Copilot API.
+
+### Feature: Live model fetching from provider API (closes #375)
+
+- **`api/routes.py`**: New `/api/models/live?provider=openai` endpoint. Fetches the actual model list from the provider's `/v1/models` API using the user's configured credentials. Includes URL scheme validation (B310), SSRF guard (private IP block), and graceful `not_supported` response for providers without a standard `/v1/models` endpoint (Anthropic, Google). Response normalised to `{id, label}` list, filtered to chat models.
+- **`static/ui.js`**: `populateModelDropdown()` now calls `_fetchLiveModels()` in the background after rendering the static list. Live models that aren't already in the dropdown are appended to the provider's optgroup. Results are cached per session so only one fetch per provider per page load. Skips Anthropic and Google (unsupported). Falls back to static list silently if the fetch fails.
+  - 25 new tests in `tests/test_issues_373_374_375.py`; 949 tests total (up from 924)
+
+
+## [v0.50.19] Fix UnicodeEncodeError when downloading files with non-ASCII filenames (PR #378)
+
+- **Workspace file downloads no longer crash for Unicode filenames** (`api/routes.py`): Clicking a PDF or other file with Chinese, Japanese, Arabic, or other non-ASCII characters in its name caused a `UnicodeEncodeError` because Python's HTTP server requires header values to be latin-1 encodable. A new `_content_disposition_value(disposition, filename)` helper centralises `Content-Disposition` generation: it strips CR/LF (injection guard), builds an ASCII fallback for the legacy `filename=` parameter (non-ASCII chars replaced with `_`), and preserves the full UTF-8 name in `filename*=UTF-8''...` per RFC 5987. Both `attachment` and `inline` responses use it.
+  - 2 new integration tests in `tests/test_sprint29.py` covering Chinese filenames for both download and inline responses, verifying the header is latin-1 encodable and `filename*=UTF-8''` is present; 924 tests total (up from 922)
+
+## [v0.50.18] Recover from invalid default workspace paths (PR #366)
+
+- **WebUI no longer breaks when the configured default workspace is unavailable** (`api/config.py`): The workspace resolution path was refactored into three composable functions — `_workspace_candidates()`, `_ensure_workspace_dir()`, and `resolve_default_workspace()`. When the configured workspace (from env var, settings file, or passed path) cannot be created or accessed, the server falls back through an ordered priority list: `HERMES_WEBUI_DEFAULT_WORKSPACE` env var → `~/workspace` (if exists) → `~/work` (if exists) → `~/workspace` (create it) → `STATE_DIR/workspace`.
+- **`save_settings()` now validates and corrects the workspace path** (`api/config.py`): If a client posts an invalid or inaccessible `default_workspace`, the saved value is corrected to the nearest valid fallback rather than persisting an unusable path.
+- **Startup normalizes stale workspace paths** (`api/config.py`): If the settings file stores a workspace that no longer exists, the server rewrites it with the resolved fallback on startup so the problem self-heals.
+  - 7 tests in `tests/test_default_workspace_fallback.py` (2 from PR + 5 added during review: fallback creation, RuntimeError on all-fail, deduplication, env var priority, unwritable path returns False); 922 tests total (up from 915)
+
+## [v0.50.17] Docker: pre-install uv at build time + fix workspace permissions (fixes #357)
+
+- **Docker containers no longer need internet access at startup** (`Dockerfile`): `uv` is now installed at image build time via `RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh` (run as root, so `uv` lands in `/usr/local/bin` — accessible to all users). The init script skips the download if `uv` is already on PATH (`command -v uv`), and falls back to downloading with a proper `error_exit` if it isn't. This fixes startup failures in air-gapped, firewalled, or isolated Docker networks where `github.com` is unreachable at runtime.
+  - **Fix applied during review**: the original PR installed `uv` as the `hermeswebuitoo` user (to `~hermeswebuitoo/.local/bin`), which is not on the `hermeswebui` runtime user's `PATH`. Changed to install as `root` with `UV_INSTALL_DIR=/usr/local/bin` so `uv` is in the system PATH for all users.
+- **Workspace directory now writable by the hermeswebui user** (`docker_init.bash`): The init script now uses `sudo mkdir -p` and `sudo chown hermeswebui:hermeswebui` for `HERMES_WEBUI_DEFAULT_WORKSPACE`. Docker auto-creates bind-mount directories as `root` if they don't exist on the host, making them unwritable by the app user. The `sudo chown` corrects ownership after creation.
+  - 15 new structural tests in `tests/test_issue357.py`; 915 tests total (up from 900)
+
+## [v0.50.16] Fix CSRF check failing behind reverse proxy on non-standard ports (PR #360)
+
+- **CSRF no longer rejects POST requests from reverse-proxied deployments on non-standard ports** (`api/routes.py`, fixes #355): When serving behind Nginx Proxy Manager or similar on a port like `:8000`, browsers send `Origin: https://app.example.com:8000` while the proxy forwards `Host: app.example.com` (port stripped). The old string comparison failed this as cross-origin. Two changes fix it:
+  - `_normalize_host_port()`: properly splits host:port strings including IPv6 bracket notation (`[::1]:8080`)
+  - `_ports_match(scheme, origin_port, allowed_port)`: scheme-aware port equivalence — absent port equals `:80` for `http://` and `:443` for `https://`. This prevents the previous cross-protocol confusion where `http://host` could incorrectly match an `https://host:443` server (security fix applied on top of the original PR)
+  - `HERMES_WEBUI_ALLOWED_ORIGINS` env var: comma-separated explicit origin allowlist for cases where port normalization alone isn't sufficient (e.g. non-standard ports like `:8000` where the proxy strips the port entirely). Entries without a scheme (`https://`) are rejected with a startup warning.
+- **Security fix applied during review**: the original `_ports_match` treated both port 80 and port 443 as interchangeable with "absent port", which is scheme-unaware. An `http://host` origin would pass for an `https://host:443` server. Fixed by making the default-port lookup scheme-specific.
+  - 29 new tests in `tests/test_sprint29.py` (5 from PR + 24 added during review): cover scheme-aware port matching, cross-protocol rejection, unit tests for `_normalize_host_port` and `_ports_match`, allowlist validation, comma-separated origins, no-scheme allowlist warning, the bug scenario with and without the allowlist; 900 tests total (up from 871)
+
+## [v0.50.15] KaTeX math rendering for LaTeX in chat and workspace previews (fixes #347)
+
+- **LaTeX / KaTeX math now renders in chat messages and workspace file previews** (`static/ui.js`, `static/workspace.js`, `static/style.css`, `static/index.html`): Inline math (`$...$`, `\(...\)`) and display math (`$$...$$`, `\[...\]`) are rendered via KaTeX instead of displaying as raw text. Follows the existing mermaid lazy-load pattern: delimiters are stashed before markdown processing, placeholder elements are emitted, and KaTeX JS is loaded from CDN on first use — no KaTeX JS is loaded unless math is present.
+  - `$$...$$` and `\[...\]` → centered display math (`<div class="katex-block">`)
+  - `$...$` and `\(...\)` → inline math (`<span class="katex-inline">`); requires non-space at `$` boundaries to avoid false positives on currency amounts like `$5`
+  - KaTeX JS lazy-loaded from jsdelivr CDN with SRI hash; KaTeX CSS loaded eagerly in `<head>` to prevent layout shift
+  - `throwOnError:false` — invalid LaTeX degrades to a `<code>` span rather than crashing the message
+  - `trust:false` — disables KaTeX commands that could execute code
+  - `<span>` added to `SAFE_TAGS` allowlist for inline math spans (tag name boundary check preserved)
+- **Fix: fence stash now runs before math stash** (`static/ui.js`): The original PR had math stash before fence stash, meaning `\`$x$\`` inside backtick code spans was incorrectly extracted as math instead of being protected as code. Order corrected — fence_stash runs first so code spans protect their contents.
+- **Workspace file previews now render math** (`static/workspace.js`): Added `requestAnimationFrame(renderKatexBlocks)` after markdown file preview renders, matching the chat message path. Without this, math placeholders appeared in previews but were never rendered.
+  - 29 tests in `tests/test_issue347.py` (18 original + 11 new covering stash ordering, workspace wiring, false-positive prevention); 870 tests total (up from 841)
+
+## [v0.50.14] Security fixes: B310 urlopen scheme validation, B324 MD5 usedforsecurity, B110 bare except logging + QuietHTTPServer (PR #354)
+
+- **B324 — MD5 no longer triggers crypto warnings** (`api/gateway_watcher.py`): `_snapshot_hash` uses MD5 only as a non-cryptographic change-detection hash. Added `usedforsecurity=False` so systems with strict crypto policies (FIPS mode etc.) don't reject the call.
+- **B310 — urlopen now validates URL scheme** (`api/config.py`, `bootstrap.py`): Both `get_available_models()` and `wait_for_health()` validate that the URL scheme is `http` or `https` before calling `urllib.request.urlopen`, preventing `file://` or other dangerous scheme injection. Added `# nosec B310` suppression after each validated call.
+- **B110 — bare `except: pass` blocks replaced with `logger.debug()`** (12 files): All `except Exception: pass` and `except: pass` blocks now log the failure at DEBUG level so operators can diagnose issues in production without changing behavior. A module-level `logger = logging.getLogger(__name__)` was added to each file.
+- **`QuietHTTPServer`** (`server.py`): Subclass of `ThreadingHTTPServer` that overrides `handle_error()` to silently drop `ConnectionResetError`, `BrokenPipeError`, `ConnectionAbortedError`, and socket errno 32/54/104 (client disconnect races). Real errors still delegate to the default handler. Reduces log spam from SSE clients that disconnect mid-stream.
+- **Session title redaction** (`api/routes.py`): The `/api/sessions` list endpoint now applies `_redact_text` to session titles before returning them, consistent with the per-session `redact_session_data()` already applied elsewhere.
+- **Fix**: `QuietHTTPServer.handle_error` uses `sys.exc_info()` (standard library) not `traceback.sys.exc_info()` (implementation detail); `sys` is now explicitly imported in `server.py`.
+  - 19 new tests in `tests/test_sprint43.py`; 841 tests total (up from 822)
+
+## [v0.50.13] Fix session_search in WebUI sessions — inject SessionDB into AIAgent (PR #356)
+
+- **`session_search` now works in WebUI sessions** (`api/streaming.py`): The agent's `session_search` tool returned "Session database not available" for all WebUI sessions. The CLI and gateway code paths both initialize a `SessionDB` instance and pass it via `session_db=` to `AIAgent.__init__()`, but the WebUI streaming path was missing this step. `_run_agent_streaming` now initializes `SessionDB()` before constructing the agent and passes it in. A `try/except` wrapper makes the init non-fatal — if `hermes_state` is unavailable (older installs, test environments), a `WARNING` is printed and `session_db=None` is passed instead, preserving the prior behavior gracefully.
+  - 7 new tests in `tests/test_sprint42.py`; 822 tests total (up from 815)
+
+## [v0.50.12] Profile .env isolation — prevent API key leakage on profile switch (fixes #351)
+
+- **API keys no longer leak between profiles on switch** (`api/profiles.py`): `_reload_dotenv()` now tracks which env vars were loaded from the active profile's `.env` and clears them before loading the next profile. Previously, switching from a profile with `OPENAI_API_KEY=X` to a profile without that key left `X` in `os.environ` for the duration of the process — effectively leaking credentials across the profile boundary. A module-level `_loaded_profile_env_keys: set[str]` tracks loaded keys; it is cleared and repopulated on every `_reload_dotenv()` call.
+- **`apply_onboarding_setup()` ordering fixed** (`api/onboarding.py`): the belt-and-braces `os.environ[key] = api_key` direct assignment is now placed **after** `_reload_dotenv()`. Previously the key was wiped by the isolation cleanup when `_reload_dotenv()` ran immediately after the direct set.
+  - 2 new tests in `tests/test_profile_env_isolation.py`; 815 tests total (up from 813)
+
+## [v0.50.11] Chat table styles + plain URL auto-linking (fixes #341, #342)
+
+- **Tables in chat messages now render with visible borders** (`static/style.css`): The `.msg-body` area had no table CSS, so markdown tables sent by the assistant were unstyled and unreadable. Four new rules mirror the existing `.preview-md` table styles: `border-collapse:collapse`, per-cell padding and borders via `var(--border2)`, and an alternating-row tint. Two `:root[data-theme="light"]` overrides ensure the borders and header background adapt correctly in light mode. (fixes #341)
+- **Plain URLs in chat messages are now clickable** (`static/ui.js`): Bare URLs like `https://example.com` were rendered as plain text. A new autolink pass in `renderMd()` converts `https?://...` URLs to `<a>` tags automatically. Runs after the SAFE_TAGS escape pass (protecting code blocks), before paragraph wrapping. Also applied inside `inlineMd()` so URLs in list items, blockquotes, and table cells are linked too. Trailing punctuation stripped; `esc()` applied to both href and link text. (fixes #342)
+  - 11 new tests (4 in `tests/test_issue341.py`, 7 in `tests/test_issue342.py`); 813 tests total (up from 802)
+- **Test infrastructure fix** (`tests/test_sprint34.py` #349): two static-file opens used bare relative paths that failed when pytest ran from outside the repo root; replaced with `pathlib.Path(__file__).parent.parent` consistent with the rest of the suite. 813/813 now pass from any working directory.
+
+## [v0.50.10] Title auto-generation fix + mobile close button (PR #333)
+
+- **Session title now auto-generates for all default title values** (`'Untitled'`, `'New Chat'`, empty string): The condition in `api/streaming.py` that triggers `title_from()` previously only matched `'Untitled'`. It now also covers `'New Chat'` (used by some external clients/forks) and any empty/falsy title, so sessions started from those states get a proper auto-generated title after the first message.
+- **Redundant workspace panel close button hidden on mobile** (`static/style.css`): On viewports ≤900px wide, both the desktop collapse button (`#btnCollapseWorkspacePanel`) and the mobile-specific X button (`.mobile-close-btn`) were rendered simultaneously. The desktop button is now hidden on mobile and `.mobile-close-btn` is hidden by default (desktop) and shown only on mobile — eliminating the duplicate control.
+  - 11 new tests in `tests/test_sprint41.py`; 802 tests total (up from 791)
+
+## [v0.50.9] Onboarding works from Docker bridge networks (PR #335, fixes #334)
+
+- **Docker users can now complete onboarding without enabling auth first** (closes #334): The onboarding setup endpoint previously only accepted requests from `127.0.0.1`. Docker containers connect via bridge network IPs (`172.17.x.x`, etc.), so the endpoint returned a 403 mid-wizard with no clear explanation. The check now accepts any loopback or RFC-1918 private address (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) using Python's `ipaddress.is_loopback` and `is_private`. Public IPs are still blocked unless auth is enabled.
+
+## [v0.50.8] Model dropdown deduplication — hyphen vs dot separator fix (PR #332)
+
+- **Model dropdown no longer shows duplicates for hyphen-format configs** (e.g. `claude-sonnet-4-6` from hermes-agent config): The server-side normalization in `api/config.py` now unifies hyphens and dots when checking whether the default model is already in the dropdown. Previously, `claude-sonnet-4-6` (hermes-agent format) and `claude-sonnet-4.6` (WebUI list format) were treated as different models, causing the same model to appear twice — once as a raw unlabelled entry and once with the correct display name. The raw entry is now suppressed and the labelled one is selected as default.
+- **README updated**: test count corrected to 791 / 51 files; all module line counts updated to current values; `onboarding.py`, `state_sync.py`, `updates.py` added to the architecture listing.
+
+## [v0.50.7] OAuth provider onboarding path — Codex/Copilot no longer blocks setup (PR #331, fixes #329 bug 2)
+
+- **OAuth providers now have a proper onboarding path** (closes bug 2): Users with `openai-codex`, `copilot`, `qwen-oauth`, or any other OAuth-authenticated provider now see a clear confirmation card instead of an unusable API key input form.
+  - If already authenticated (`chat_ready: true`): blue "Provider already authenticated" card with a direct Continue button — no key entry required.
+  - If not yet authenticated: amber card explaining how to run `hermes auth` or `hermes model` in a terminal to complete setup.
+  - Either state includes a collapsible "switch provider" section for users who want to move to an API-key provider instead.
+  - `_build_setup_catalog` now includes `current_is_oauth` boolean; fixed a latent `KeyError` crash when looking up `default_model` for OAuth providers.
+  - 5 new i18n keys in English and Spanish (`onboarding_oauth_*`).
+  - 15 new tests in `tests/test_sprint40.py`; 791 tests total (up from 776)
+
+## [v0.50.6] Skip-onboarding env var + synchronous API key reload (PR #330, fixes #329 bugs 1+3)
+
+- **`HERMES_WEBUI_SKIP_ONBOARDING=1`** (closes bug 1): Hosting providers can set this env var to bypass the first-run wizard entirely. Only takes effect when `chat_ready` is also true — a misconfigured deployment still shows the wizard. Accepts `1`, `true`, or `yes`.
+- **API key takes effect immediately after onboarding** (closes bug 3): `apply_onboarding_setup` now sets `os.environ[env_var]` synchronously after writing the key to `.env`, so the running process can use it without a server restart. Also attempts to reload `hermes_cli`'s config cache as a belt-and-suspenders measure.
+  - 8 new tests in `tests/test_sprint39.py`; 776 tests total (up from 768)
+
+## [v0.50.5] Think-tag stripping with leading whitespace (PR #327)
+
+- **Fix think-tag rendering for models that emit leading whitespace** (e.g. MiniMax M2.7): Some models emit one or more newlines before the `<think>` opening tag. The previous regex used a `^` anchor, so it only matched when `<think>` was the very first character. When the anchor failed, the raw `</think>` tag appeared in the rendered message body.
+  - `static/ui.js` (stored messages): removed `^` anchor from `<think>` and Gemma channel-token regexes; switched from `.slice()` to `.replace()` + `.trimStart()` so stripping works regardless of position
+  - `static/messages.js` (live stream): `trimStart()` before `startsWith`/`indexOf` checks; partial-tag-prefix guard also uses trimmed buffer
+  - 10 new tests in `tests/test_sprint38.py`; 768 tests total (up from 758)
+
+## [v0.50.3] Onboarding completes gracefully for pre-configured providers (PR #323, fixes #322)
+
+- **OAuth/CLI-configured providers no longer blocked by onboarding** (closes #322): Users with providers already set up via the CLI (`openai-codex`, `copilot`, `nous`, etc.) hit `Unsupported provider for WebUI onboarding` when clicking "Open Hermes" on the finish page. The wizard now marks onboarding complete and lets them through — the agent setup is already done, no wizard steps needed.
+  - 5 new tests in `tests/test_sprint34.py`; 758 tests total (up from 753)
+
+## [v0.50.2] Workspace panel state persists across refreshes
+
+- **Workspace panel open/closed persists** (localStorage key `hermes-webui-workspace-panel`): Once you open the workspace/files pane, it stays open after a page refresh. Closing it explicitly saves the closed state, which also survives a refresh. The restore happens in the boot sequence before the first render, so there is no flash of the wrong state. Works for both desktop and mobile.
+  - State is stored as `'open'` or `'closed'` — `'open'` restores as `'browse'` mode; any preview state is re-evaluated normally.
+  - 7 new tests in `tests/test_sprint37.py`; 753 tests total (up from 746)
+
+## [v0.50.1] Mobile Enter key inserts newline (PR #315, fixes #269)
+
+- **Enter inserts newline on mobile** (closes #269): On touch-primary devices (detected via `matchMedia('(pointer:coarse)')`), the Enter key now inserts a newline instead of sending. Users send via the Send button, which is always visible on mobile. Desktop behavior is unchanged — Enter sends, Shift+Enter inserts a newline.
+  - The `ctrl+enter` setting continues to work as before on all devices.
+  - Users who explicitly set send key to `enter` on mobile can override in Settings.
+  - 4 new tests in `tests/test_mobile_layout.py`; 746 tests total (up from 742)
+
+## [v0.50.0] Composer-centric UI refresh + Hermes Control Center (PR #242)
+
+Major UI overhaul by **[@aronprins](https://github.com/aronprins)** — the biggest single contribution to the project. Rebased and reviewed on `pr-242-review`.
+
+- **Composer as control hub** — model selector, profile chip, and workspace chip now live in the composer footer as pill buttons with dropdowns. The context window usage ring (token count, cost, fill) replaces the old linear pill.
+- **Hermes Control Center** — a single sidebar launcher button (bottom of sidebar) replaces the gear icon settings modal. Tabbed 860px modal: Conversation tab (transcript/JSON export, import, clear), Preferences tab (all settings), System tab (version, password). Always resets to Conversation on close.
+- **Activity bar removed** — turn-scoped status (thinking, cancelling) renders inline in the composer footer via `setComposerStatus`.
+- **Session `⋯` dropdown** — per-row pin/archive/duplicate/move/delete actions move from inline buttons into a shared dropdown menu; click-outside/scroll/Escape handling.
+- **Workspace panel state machine** — `_workspacePanelMode` (`closed`/`browse`/`preview`) in boot.js with proper transitions and discard-unsaved guard.
+- **Icon additions** — save, chevron-right, arrow-right, pause, paperclip, copy, rotate-ccw, user added to icons.js.
+- **i18n additions** — 6 new keys across en/de/zh/zh-Hant for control center sections.
+- **OLED theme** — 7th built-in theme (true black background for OLED displays), originally contributed by **[@kevin-ho](https://github.com/kevin-ho)** in PR #168.
+- **Mobile fixes** — icon-only composer chips below 640px, `overflow-y: hidden` on `.composer-left` to prevent scrollbar, profile dropdown `max-width: min(260px, calc(100vw - 32px))`.
+- 742 tests total; all existing tests pass; version badge in System tab updated to v0.50.0.
+
+## [v0.49.4] Cancel stream cleanup guaranteed (PR #309, fixes #299)
+
+- **Reliable cancel cleanup** (closes #299): `cancelStream()` no longer depends on the SSE `cancel` event to clear busy state and status text. Previously, if the SSE connection was already closed when cancel fired, "Cancelling..." would linger indefinitely. Now `cancelStream()` clears `S.activeStreamId`, calls `setBusy(false)`, `setStatus('')`, and hides the cancel button directly after the cancel API request — regardless of SSE connection state. The SSE cancel handler still runs when the connection is alive (all operations are idempotent).
+  - 9 new tests in `tests/test_sprint36.py`; 742 tests total (up from 733)
+
+## [v0.49.3] Session title guard + breadcrumb nav + wider panel (PRs #301, #302)
+
+- **Preserve user-renamed session titles** (PR #301 by **[@franksong2702](https://github.com/franksong2702)** / closes #300): `title_from()` now only runs when the session title is still `'Untitled'`. Previously it overwrote user-assigned titles on every conversation turn.
+  - Fixed in both `api/streaming.py` (streaming path) and `api/routes.py` (sync path).
+- **Clickable breadcrumb navigation** (PR #302 by **[@franksong2702](https://github.com/franksong2702)** / closes #292): Workspace file preview now shows a clickable breadcrumb path bar. Each segment navigates directly to that directory level. Paths with spaces and special characters handled correctly. `clearPreview()` restores the directory breadcrumb on close.
+- **Wider right panel** (PR #302): `PANEL_MAX` raised from 500 to 1200 — right panel can now be dragged wider on ultrawide screens.
+- **Responsive message width** (PR #302): `.messages-inner` now scales up gracefully at 1400px (1100px max) and 1800px (1200px max) viewport widths instead of capping at 800px on all screen sizes.
+  - 12 new tests in `tests/test_sprint35.py`; 733 tests total (up from 721)
+
+## [v0.49.2] OAuth provider support in onboarding (issues #303, #304)
+
+- **OAuth provider bypass** (closes #303, #304): The first-run onboarding wizard now correctly recognizes OAuth-authenticated providers (GitHub Copilot, OpenAI Codex, Nous Portal, Qwen OAuth) as ready, instead of always demanding an API key.
+  - New `_provider_oauth_authenticated()` helper in `api/onboarding.py` checks `hermes_cli.auth.get_auth_status()` first (authoritative), then falls back to parsing `~/.hermes/auth.json` directly for the known OAuth provider IDs (`openai-codex`, `copilot`, `copilot-acp`, `qwen-oauth`, `nous`).
+  - `_status_from_runtime()` now has an `else` branch for providers not in `_SUPPORTED_PROVIDER_SETUPS`; OAuth-authenticated providers return `provider_ready=True` and `setup_state="ready"`.
+  - The `provider_incomplete` status note no longer says "API key" for OAuth providers — it now says "Run 'hermes auth' or 'hermes model' in a terminal to complete setup."
+  - 21 new tests in `tests/test_sprint34.py`; 721 tests total (up from 700)
+
+## [v0.49.1] Docker docs + mobile Profiles button (PRs #291, #265)
+
+- **Two-container Docker setup** (PR #291 / closes #288): New `docker-compose.two-container.yml` for running the Hermes Agent and WebUI as separate containers with shared volumes. Documents the architecture clearly; localhost-only port binding by default.
+- **Mobile Profiles button** (PR #265 by **[@Bobby9228](https://github.com/Bobby9228)**): Adds Profiles to the mobile bottom navigation bar (last position: Chat → Tasks → Skills → Memory → Spaces → Profiles). Uses `mobileSwitchPanel()` for correct active-highlight behaviour; `data-panel="profiles"` attribute set; SVG matches other nav icons; 3 new tests.
+  - 700 tests total (up from 697)
+
+## [v0.49.0] First-run onboarding wizard + self-update hardening (PRs #285, #287, #289)
+
+- **One-shot bootstrap and first-run setup wizard** (PR #285 — first-run onboarding flow): New users are greeted with a guided onboarding overlay on first load. The wizard checks system status, configures a provider (OpenRouter, Anthropic, OpenAI, or custom OpenAI-compatible endpoint), sets a workspace and optional password, and marks setup as complete — all without leaving the browser.
+  - `bootstrap.py`: one-shot CLI bootstrap that writes `~/.hermes/config.yaml` and `~/.hermes/.env` from flags; idempotent and safe to re-run
+  - `api/routes.py`: `/api/onboarding/status` (GET) and `/api/onboarding/complete` (POST) endpoints; real provider config persistence to `config.yaml` + `.env`
+  - `static/onboarding.js`: full wizard JS module — step navigation, provider dropdown, model selector, API key input, Back/Continue flow, i18n support
+  - `static/index.html`: onboarding overlay HTML shell + `<script src="/static/onboarding.js">` load
+  - `static/i18n.js`: 40+ onboarding keys added to all 5 locales (en, es, de, zh-Hans, zh-Hant)
+  - `static/boot.js`: on load, fetches `/api/onboarding/status` and opens wizard when `completed=false`
+  - Wizard does NOT show when `onboarding_completed=true` in settings
+  - 14 new tests in `tests/test_onboarding.py`; 693 tests total (up from 679)
+
+- **Self-update git pull diagnostics** (PR #287): Fixes multiple failure modes in the WebUI self-update flow when the repo has a non-trivial git state.
+  - `_run_git()` now returns stderr on failure (stdout fallback, then exit-code message) — users see actionable git errors instead of empty strings
+  - New `_split_remote_ref()` helper splits `origin/master` into `('origin', 'master')` before `git pull --ff-only` — fixes silent failures where git misinterpreted the combined string as a repository name
+  - `--untracked-files=no` added to `git status --porcelain` — prevents spurious stash failures in repos with untracked files
+  - Early merge-conflict detection via porcelain status codes before attempting pull
+  - 4 new unit tests in `tests/test_updates.py`
+
+- **Skip flaky redaction test in agent-less environments** (PR #289): `test_api_sessions_list_redacts_titles` added to the CI skip list for environments without hermes-agent installed. Test still runs with the full agent; security coverage preserved by 6 pure-unit tests and 2 other API-level redaction tests.
+  - 697 tests total (up from 693)
+
+## [v0.48.2] Provider/model mismatch warning (PR #283, fixes #266)
+
+- **Provider mismatch warning** (PR #283): WebUI now warns when you select a model from a provider different from the one Hermes is configured for, instead of silently failing with a 401 error.
+  - `api/streaming.py`: 401/auth errors classified as `type='auth_mismatch'` with an actionable hint ("Run `hermes model` in your terminal to switch providers")
+  - `static/ui.js`: `populateModelDropdown()` stores `active_provider` from `/api/models` as `window._activeProvider`; new `_checkProviderMismatch()` helper compares selected model's provider prefix against the configured provider
+  - `static/boot.js`: `modelSelect.onchange` calls `_checkProviderMismatch()` and shows a toast warning immediately on selection
+  - `static/messages.js`: `apperror` handler shows "Provider mismatch" label (via i18n) instead of "Error" for auth errors
+  - `static/i18n.js`: `provider_mismatch_warning` and `provider_mismatch_label` keys added to all 5 locales (en, es, de, zh-Hans, zh-Hant)
+  - Check skipped for `openrouter` and `custom` providers to avoid false positives
+  - 21 new tests in `tests/test_provider_mismatch.py`; 679 tests total (up from 658)
+## [v0.48.1] Markdown table inline formatting (PR #278)
+
+- **Inline formatting in table cells** (PR #278, @nesquena): Table header and data cells now render `**bold**`, `*italic*`, `` `code` ``, and `[links](url)` correctly. Previously `esc()` was used, which displayed raw HTML tags as text. Changed to `inlineMd()` consistent with list items and blockquotes. XSS-safe: `inlineMd()` escapes all interpolated values. Two-line change in `static/ui.js`. Fixes #273.
+## [v0.48.0] Real-time gateway session sync (PR #274)
+
+- **Real-time gateway session sync** (PR #274, @bergeouss): Gateway sessions from Telegram, Discord, Slack, and other messaging platforms now appear in the WebUI sidebar and update in real time as new messages arrive. Enable via the "Show agent sessions" checkbox (renamed from "Show CLI sessions").
+  - `api/gateway_watcher.py`: background daemon thread polling `state.db` every 5s using MD5 hash-based change detection
+  - New SSE endpoint `/api/sessions/gateway/stream` for real-time push to browser
+  - Dynamic source badges: telegram (blue), discord (purple), slack (dark purple), cli (green)
+  - Zero changes to hermes-agent — WebUI reads the shared `state.db` that both components access
+  - 10 new tests in `test_gateway_sync.py` covering metadata, filtering, SSE, and watcher lifecycle
+  - 658 tests (up from 648)
+## [v0.47.1] Spanish locale (PR #275)
+
+- **Spanish (es) locale** (PR #275, @gabogabucho): Full Spanish translation for all 175 UI strings. Exposed automatically in the language selector via existing `LOCALES` wiring. Includes regression tests verifying locale presence, representative translations, and key-parity with English. 648 tests (up from 645).
+## [v0.47.0] — 2026-04-11
+
+### Features
+- **`/skills [query]` slash command** (PR #257): Fetches from `/api/skills`, groups results by category (alphabetically), renders as a formatted assistant message. Optional query filters by name, description, or category. Shows in the `/` autocomplete dropdown. i18n for en/de/zh/zh-Hant. 1 regression test added.
+- **Shared app dialogs replace native `confirm()`/`prompt()`** (PR #251, extracted from #242 by @aronprins): `showConfirmDialog()` and `showPromptDialog()` in `ui.js`, backed by `#appDialogOverlay`. Replaces all 11 native browser dialog call sites across panels.js, sessions.js, ui.js, workspace.js. Full keyboard focus trap (Tab/Escape/Enter), ARIA roles, danger mode, focus restore, mobile-responsive buttons. i18n for en/de/zh/zh-Hant. 5 new tests in `test_sprint33.py`.
+- **Session `⋯` action dropdown** (PR #252, extracted from #242 by @aronprins): Replaces 5 per-row hover buttons (pin/move/archive/duplicate/delete) with a single `⋯` trigger. Menu uses `position:fixed` to avoid sidebar clipping. Full close handling: click-outside, scroll, Escape, resize-reposition. `test_sprint16.py` updated to assert the new trigger exists and old button classes are gone.
+
+### Bug Fixes
+- **Custom provider with slash model name no longer rerouted to OpenRouter** (PR #255): `resolve_model_provider()` now returns immediately with the configured `provider`/`base_url` when `base_url` is set, before the slash-based OpenRouter heuristic runs. Fixes `google/gemma-4-26b-a4b` with `provider: custom` being silently routed to OpenRouter (401 errors). 1 regression test added. Fixes #230.
+- **Android Chrome: workspace panel now closeable on mobile** (PR #256): `toggleMobileFiles()` now shows/hides the mobile overlay. New `closeMobileFiles()` helper closes the right panel with correct overlay tracking. Overlay tap-to-close calls both `closeMobileSidebar()` and `closeMobileFiles()`. Mobile-only `×` close button added to workspace panel header. Fix applied during review: `closeMobileSidebar()` now checks if the right panel is still open before hiding the overlay. Fixes #247.
+- **Android Chrome: profile dropdown no longer clipped on mobile** (PR #256): `.profile-dropdown` switches to `position:fixed; top:56px; right:8px` at `max-width:900px`, escaping the `overflow-x:auto` stacking context that was making it invisible. Fixes #246.
+
+### Tests
+- **Mobile layout regression suite** (PR #254): 14 static tests in `tests/test_mobile_layout.py` that run on every QA pass. Covers: CSS breakpoints at 900px/640px, right panel slide-over, mobile overlay, bottom nav, files button, profile dropdown z-index, chip overflow, workspace close, `100dvh`, 44px touch targets, 16px textarea font. All pass against current and future master.
+
+**CSS hotfix (commit a2ae953, post-tag):** session action menu — icon now displays inline-left of text. The `.ws-opt` base class (`flex-direction:column`) was causing SVG icons to stack above the label. Fixed with 3 CSS rule overrides on `.session-action-opt`.
+
+**645 tests (up from 624 on v0.46.0 — +21 new tests)**
+
+---
+
+## [v0.46.0] — 2026-04-11
+
+### Features
+- **Docker UID/GID matching** (PR #237 by @mmartial): New `docker_init.bash` entrypoint adds `hermeswebui`/`hermeswebuitoo` user pattern so container-created files match the host user UID/GID. Prevents `.hermes` volume mounts from being owned by root. Configure via `WANTED_UID` and `WANTED_GID` env vars (default 1000/1000). README updated with setup instructions.
+  - `Dockerfile` — two-user pattern with passwordless sudo; `/.within_container` marker for in-container detection; starts as `hermeswebuitoo`, switches to correct UID/GID
+  - `docker-compose.yml` — mounts `.hermes` at `/home/hermeswebui/.hermes`; uses `${UID:-1000}/${GID:-1000}` for UID/GID passthrough
+  - `server.py` — detects `/.within_container` and prints a note when binding to 0.0.0.0
+
+### Security
+- **Credential redaction in API responses** (PR #243 by @kcclaw001): All API endpoints now redact credentials from responses at the response layer. Session files on disk are unchanged; only the API output is masked.
+  - `api/helpers.py` — `redact_session_data()` and `_redact_value()` apply pattern-based redaction to messages, tool_calls, and title; covers GitHub PATs, OpenAI/Anthropic keys, AWS keys, Slack tokens, HuggingFace tokens, Authorization Bearer headers, and PEM private key blocks
+  - `api/routes.py` — `GET /api/session`, `GET /api/session/export`, `GET /api/memory` all wrapped with redaction
+  - `api/streaming.py` — SSE `done` event payload redacted before broadcast
+  - `api/startup.py` — new `fix_credential_permissions()` called at startup; `chmod 600` on `.env`, `google_token.json`, `auth.json`, `.signing_key` if they have group/other read bits set
+  - `tests/test_security_redaction.py` — 13 new tests covering redaction functions and endpoint structural verification
+
+### Bug Fixes
+- **Custom model list discovery with config API key** (PR #238 by @ccqqlo): `get_available_models()` now reads `api_key` from `config.yaml` before env vars when fetching `/v1/models` from custom endpoints (LM Studio, Ollama, etc.). Priority: `model.api_key` → `providers.<active>.api_key` → `providers.custom.api_key` → env vars. Also adds `OpenAI/Python 1.0` User-Agent header. Fixes model picker collapsing to single default model for config-only setups. 1 new regression test.
+- **HTML entity decode before markdown processing** (PR #239 by @Argonaut790): Adds `decode()` helper in `renderMd()` to fix double-escaping of HTML entities from LLM output (e.g. `&lt;code&gt;` becoming `&amp;lt;code&amp;gt;` instead of rendering). XSS-safe: decode runs before `esc()`, only 5 entity patterns (`&lt;`, `&gt;`, `&amp;`, `&quot;`, `&#39;`).
+- **Simplified Chinese translations completed** (PR #239 by @Argonaut790): 40+ missing keys added to `zh` locale (123 → 164 keys). New `zh-Hant` (Traditional Chinese) locale with 163 keys.
+- **Cancel button now interrupts agent execution** (PR #244 by @huangzt): `cancel_stream()` now calls `agent.interrupt()` to stop backend tool execution, not just the SSE stream. `AGENT_INSTANCES` dict (protected by `STREAMS_LOCK`) tracks active agents. Race condition fixed: after storing agent, immediately checks if cancel was already requested. Frontend: removes stale "Cancelling..." status text; `setBusy(false)` always called on cancel. 6 new unit tests in `tests/test_cancel_interrupt.py`.
+
+**624 tests (up from 604 on v0.45.0 — +20 new tests)**
+
+---
+
+## [v0.45.0] — 2026-04-10
+
+### Features
+- **Custom endpoint fields in new profile form** (PR #233, fixes #170): The New Profile form now accepts optional Base URL and API key fields. When provided, both are written into the new profile's `config.yaml` under the `model` section, enabling local-endpoint setups (Ollama, LMStudio, etc.) to be configured in one step without editing YAML manually. The write is a no-op when both fields are left blank, so existing profile creation behavior is unchanged.
+  - `api/profiles.py` — `_write_endpoint_to_config()` merges `base_url`/`api_key` into `config.yaml` using `yaml.safe_load` + `yaml.dump`, preserving any existing keys
+  - `api/routes.py` — accepts `base_url` and `api_key` from POST body; validates that `base_url`, if provided, starts with `http://` or `https://` (returns 400 for invalid schemes)
+  - `static/index.html` — two new inputs added to the New Profile form: Base URL (with `http://localhost:11434` placeholder) and API key (password type)
+  - `static/panels.js` — `submitProfileCreate()` reads both fields, validates URL format client-side before sending, and includes them in the create payload; `toggleProfileForm()` clears them on cancel
+  - 9 tests in `tests/test_sprint31.py` covering: config write (base_url, api_key, both, merge, no-op), route acceptance, profile path in response, and invalid-scheme rejection
+
+**604 tests (up from 595)**
+
+## [v0.44.1] — 2026-04-10
+
+- **Unskip 16 approval tests** (PR #231): `test_approval_unblock.py` was importing `has_pending` and `pop_pending` from `tools.approval`, which the agent module had removed. The import failure tripped the `APPROVAL_AVAILABLE` guard and skipped all 16 tests in the file. Neither symbol was used in any test body. Removing the stale imports restores **595/595 passing, 0 skipped**.
+
+## [v0.44.0] — 2026-04-10
+
+### Features
+- **Lucide SVG icons** (PR #221): Replaces all emoji icons in the sidebar, workspace, and tool cards with self-hosted Lucide SVG paths via `static/icons.js`. No CDN dependency — icons are bundled directly. The `li(name)` renderer uses a hardcoded whitelist, so server-supplied tool names never inject arbitrary SVG. All 35 `onclick=` functions verified to exist in JS; all 21 icon references verified in `icons.js`.
+
+### Bug Fixes
+- **Approval card hides immediately on respond/stream-end** (PR #225): `respondApproval()` and all stream-end SSE handlers (done, cancel, apperror, error, start-error) now call `hideApprovalCard(true)`. Previously the 30s minimum-visibility guard deferred the hide, leaving the card visible with disabled buttons for up to 30s after the user clicked Approve/Deny or the session completed. The poll-loop tick correctly keeps no-force so the guard still protects against transient polling gaps. Adds 11 structural tests for the timer logic.
+- **Login page CSP fix** (PR #226): Moves `doLogin()` and Enter key listener from inline `<script>`/`onsubmit`/`onkeydown` attributes into `static/login.js`. Inline handlers are blocked by strict `script-src` CSP, causing silent login failure. i18n error strings now passed via `data-*` attributes instead of injected JS literals. Also guards `res.json()` parse with try/catch so non-JSON server errors fall back to the password-error message. Fixes #222.
+- **Update error messages** (PR #227): `_apply_update_inner()` now fetches before pulling and surfaces three distinct failure modes with actionable recovery commands: network unreachable, diverged history (`git reset --hard`), and missing upstream tracking branch (`git branch --set-upstream-to`). Generic fallback truncates to 300 chars with a sentinel for empty output. Adds 13 tests covering all new diagnostic code paths. Fixes #223.
+- **Approval pending check** (PR #228): `GET /api/approval/pending` always returned `{pending: null}` after the agent module renamed `has_pending` to `has_blocking_approval`. The route now checks `_pending` directly under `_lock`, matching how `submit_pending` writes to it. Fixes `test_approval_submit_and_respond`.
+
+### Tests
+- 579 passing, 16 skipped at this tag (595/595 after v0.44.1 unskip — +24 new tests across PRs #225, #227, #228)
+
+## [v0.43.1] — 2026-04-10
+
+- **CSRF fix for reverse proxies** (PR #219): The CSRF check now accepts `X-Forwarded-Host` and `X-Real-Host` headers in addition to `Host`, so deployments behind Caddy, nginx, and Traefik no longer reject POST requests with "Cross-origin request rejected". Security is preserved — requests with no matching proxy header are still rejected. Fixes #218.
+
+## [v0.43.0] — 2026-04-10
+
+### Features
+- **Auto-install agent dependencies on startup** (PRs #215 + #216): When `hermes-agent` is found on disk but its Python dependencies are missing (common in Docker deployments where the agent is volume-mounted post-build), `server.py` now calls `api/startup.auto_install_agent_deps()` to install from `requirements.txt` or `pyproject.toml`. Falls back gracefully — failures are logged and never fatal.
+
+### Bug Fixes
+- **Session ID validator broadened** (PR #212): `Session.load()` rejected any session ID containing non-hex characters, breaking sessions created by the new hermes-agent format (`YYYYMMDD_HHMMSS_xxxxxx`). Validator now accepts `[0-9a-z_]` while rejecting path traversal patterns (null bytes, slashes, backslashes, dot-extensions).
+- **Test suite isolation** (PR #216): `conftest.py` now kills any stale process on the test port (8788) before starting the fixture server. Stale QA harness servers (8792/8793) could occupy 8788 and cause non-deterministic test failures across the full suite.
+
+## [v0.42.2] — 2026-04-10
+
+### Bug Fixes
+- **CSP blocking inline event handlers** (PR #209): `script-src 'self'` blocked all 55+ inline `onclick=` handlers in `index.html`, making the settings panel, sidebar navigation, and most interactive controls non-functional. Added `'unsafe-inline'` to `script-src`. Also restores `https://cdn.jsdelivr.net` to `script-src` and `style-src` for Mermaid.js and Prism.js (dropped in v0.42.1).
+
+## [v0.42.1] — 2026-04-11
+
+### Bug Fixes
+- **i18n button text stripping** (post-review): Three sidebar buttons (`+ New job`, `+ New skill`, `+ New profile`) and three suggestion buttons had `data-i18n` on the outer element, which caused `applyLocaleToDOM` to replace the entire `textContent` — stripping the `+` prefix and emoji characters on locale switch. Fixed by wrapping only the translatable label text in a `<span data-i18n="...">`.
+- **German translation corrections** (post-review): Fixed `cancelling` (imperative → progressive `"Wird abgebrochen…"`), `editing` (first-person verb → noun `"Bearbeitung"`), and completed truncated descriptions for `empty_subtitle`, `settings_desc_check_updates`, and `settings_desc_cli_sessions`.
+
+## [v0.42.0] — 2026-04-10
+
+### Features
+- **German translation** (PR #190 by **[@DavidSchuchert](https://github.com/DavidSchuchert)**): Complete `de` locale covering all UI strings — settings, commands, sidebar, approval cards. Also extends the i18n system with `data-i18n-title` and `data-i18n-placeholder` attribute support so tooltip text and input placeholders are now translatable. German speech recognition uses `de-DE`.
+
+### Bug Fixes
+- **Custom slash-model routing** (PR #189 by **[@smurmann](https://github.com/smurmann)**): Model IDs like `google/gemma-4-26b-a4b` from custom providers (LM Studio, Ollama) were silently misrouted to OpenRouter because of the slash-heuristic. Custom providers now win: entries in `config.yaml → custom_providers` are checked first, so their model IDs route to the correct local endpoint regardless of format.
+- **Phantom Custom group in model picker** (PR #191 by @mbac): When `model.provider` was a named provider (e.g. `openai-codex`) and `model.base_url` was set, `hermes_cli` reported `'custom'` as authenticated, producing a duplicate "Custom" group in the dropdown. The real provider's group was missing the configured default model. Fixed by discarding the phantom `custom` entry when a real named provider is active.
+- **Hyphen/space model group injection** (PR #191): The "ensure default_model appears" post-pass used `active_provider.lower() in group_name.lower()`, which fails for `openai-codex` vs display name `OpenAI Codex` (hyphen vs space). Now uses `_PROVIDER_DISPLAY` for exact display-name matching.
+
+## [v0.41.0] — 2026-04-10
+
+### Features
+- **Optional HTTPS/TLS support** (PR #199): Set `HERMES_WEBUI_TLS_CERT` and
+  `HERMES_WEBUI_TLS_KEY` env vars to enable HTTPS natively. Uses
+  `ssl.PROTOCOL_TLS_SERVER` with TLS 1.2 minimum. Gracefully falls back to HTTP
+  if cert loading fails. No reverse proxy required for LAN/VPN deployments.
+
+### Bug Fixes
+- **CSP blocking Mermaid and Prism** (PR #197): Added Content-Security-Policy and
+  Permissions-Policy headers to every response. CSP allows `cdn.jsdelivr.net` in
+  `script-src` and `style-src` for Mermaid.js (dynamically loaded) and Prism.js
+  (statically loaded with SRI integrity hashes). All other external origins blocked.
+- **Session memory leak** (PR #196): `api/auth.py` accumulated expired session tokens
+  indefinitely. Added `_prune_expired_sessions()` called lazily on every
+  `verify_session()` call. No background thread, no lock contention.
+- **Slow-client thread exhaustion** (PR #198): Added `Handler.timeout = 30` to kill
+  idle/stalled connections before they exhaust the thread pool.
+- **False update alerts on feature branches** (PR #201): Update checker compared
+  `HEAD..origin/master` even when on a feature branch, counting unrelated master
+  commits as missing updates. Now uses `git rev-parse --abbrev-ref @{upstream}` to
+  track the current branch's upstream. Falls back to default branch when no upstream
+  is set.
+- **CLI session file browser returning 404** (PR #204): `/api/list` only checked
+  the WebUI in-memory session dict, so CLI sessions shown in the sidebar always
+  returned 404 for file browsing. Now falls back to `get_cli_sessions()` — the same
+  pattern used by `/api/session` GET and `/api/sessions` list.
+
+## [v0.40.2] — 2026-04-09
+
+### Features
+- **Full approval UI** (PR #187): When the agent triggers a dangerous command
+  (e.g. `rm -rf`, `pkill -9`), a polished approval card now appears immediately
+  instead of leaving the chat stuck in "Thinking…" forever. Four one-click buttons:
+  Allow once, Allow session, Always allow, Deny. Enter key defaults to Allow once.
+  Buttons disable immediately on click to prevent double-submit. Card auto-focuses
+  Allow once so keyboard-only users can approve in one keystroke. All labels and
+  the heading are fully i18n-translated (English + Chinese).
+
+### Bug Fixes
+- **Approval SSE event never sent** (PR #187): `register_gateway_notify()` was
+  never called before the agent ran, so the approval module had no way to push
+  the `approval` SSE event to the frontend. Fixed by registering a callback that
+  calls `put('approval', ...)` the instant a dangerous command is detected.
+- **Agent thread never unblocked** (PR #187): `/api/approval/respond` did not call
+  `resolve_gateway_approval()`, so the agent thread waited for the full 5-minute
+  gateway timeout. Now calls it on every respond, waking the thread immediately.
+- **`_unreg_notify` scoping** (PR #187): Variable was only assigned inside a `try`
+  block but referenced in `finally`. Initialised to `None` before the `try` so the
+  `finally` guard is always well-defined.
+
+### Tests
+- 32 new tests in `tests/test_sprint30.py`: approval card HTML structure, all 4
+  button IDs and data-i18n labels, keyboard shortcut in boot.js, i18n keys in both
+  locales, CSS loading/disabled/kbd states, messages.js button-disable behaviour,
+  streaming.py scoping, HTTP regression for all 4 choices.
+- 16 tests in `tests/test_approval_unblock.py` (gateway approval unit + HTTP).
+- **547 tests total** (499 → 515 → 547).
+
+---
+
+## [v0.40.1] — 2026-04-09
+
+### Bug Fixes
+- **Default locale on first install** (PR #185): A fresh install would start in
+  English based on the server default, but `loadLocale()` could resurrect a
+  stale or unsupported locale code from `localStorage`. Now `loadLocale()` falls
+  back to English when there is no saved code or the saved code is not in the
+  LOCALES bundle. `setLocale()` also stores the resolved code, so an unknown
+  input never persists to storage.
+
+---
+
+## [v0.40.0] — 2026-04-09
+
+### Features
+- **i18n — pluggable language switcher** (PR #179): Settings panel now has a
+  Language dropdown. Ships with English and Chinese (中文). All UI strings use
+  a `t()` helper that falls back to English for missing keys. The login page
+  also localises — title, placeholder, button, and error strings all respond to
+  the saved locale. Add a language by adding a LOCALES entry to `static/i18n.js`.
+- **Notification sound + browser notifications** (PR #180): Two new settings
+  toggles. "Notification sound" plays a short two-tone chime when the assistant
+  finishes or an approval card appears. "Browser notification" fires a system
+  notification when the tab is in the background.
+- **Thinking / reasoning block display** (PR #181, #182): Inline `<think>…</think>`
+  and Gemma 4 `<|channel>thought…<channel|>` tags are parsed out of assistant
+  messages and rendered as a collapsible lightbulb "Thinking" card above the reply.
+  During streaming, the bubble shows "Thinking…" until the tag closes. Hardened
+  against partial-tag edge cases and empty thinking blocks.
+
+### Bug Fixes
+- **Stray `}` in message row HTML** (PR #183): A typo in the i18n refactor left
+  an extra `}` in the `msg-role` div template literal, producing `<div class="msg-role user" }>`.
+  Removed.
+- **JS-escape login locale strings** (PR #183): `LOGIN_INVALID_PW` and
+  `LOGIN_CONN_FAILED` were injected into a JS string context without escaping
+  single quotes or backslashes. Now uses minimal JS-string escaping.
+
+---
+
+## [v0.39.1] — 2026-04-08
+
+### Bug Fixes
+- **_ENV_LOCK deadlock resolved.** The environment variable lock was held for
+  the entire duration of agent execution (including all tool calls and streaming),
+  blocking all concurrent requests. Now the lock is acquired only for the brief
+  env variable read/write operations, released before the agent runs, and
+  re-acquired in the finally block for restoration.
+
+---
+
+## [v0.39.0] — 2026-04-08
+
+### Security (12 fixes — PR #171 by @betamod, reviewed by @nesquena-hermes)
+
+- **CSRF protection**: all POST endpoints now validate `Origin`/`Referer` against `Host`. Non-browser clients (curl, agent) without these headers are unaffected.
+- **PBKDF2 password hashing**: `save_settings()` was using single-iteration SHA-256. Now calls `auth._hash_password()` — PBKDF2-HMAC-SHA256 with 600,000 iterations and a per-installation random salt.
+- **Login rate limiting**: 5 failed attempts per 60 seconds per IP returns HTTP 429.
+- **Session ID validation**: `Session.load()` rejects any non-hex character before touching the filesystem, preventing path traversal via crafted session IDs.
+- **SSRF DNS resolution**: `get_available_models()` resolves DNS before checking private IPs. Prevents DNS rebinding attacks. Known-local providers (Ollama, LM Studio, localhost) are whitelisted.
+- **Non-loopback startup warning**: server prints a clear warning when binding to `0.0.0.0` without a password set — a common Docker footgun.
+- **ENV_LOCK consistency**: `_ENV_LOCK` now wraps all `os.environ` mutations in both the sync chat and streaming restore blocks, preventing races across concurrent requests.
+- **Stored XSS prevention**: files with `text/html`, `application/xhtml+xml`, or `image/svg+xml` MIME types are forced to `Content-Disposition: attachment`, preventing execution in-browser.
+- **HMAC signature**: extended from 64 bits to 128 bits (16-char to 32-char hex).
+- **Skills path validation**: `resolve().relative_to(SKILLS_DIR)` check added after skill directory construction to prevent traversal.
+- **Secure cookie flag**: auto-set when TLS or `X-Forwarded-Proto: https` is detected. Uses `getattr` safely so plain sockets don't raise `AttributeError`.
+- **Error path sanitization**: `_sanitize_error()` strips absolute filesystem paths from exception messages before they reach the client.
+
+### Tests
+- Added `tests/test_sprint29.py` — 33 tests covering all 12 security fixes.
+
+---
+
+## [v0.38.6] — 2026-04-07
+
+### Fixed
+- **`/insights` message count always 0 for WebUI sessions** (#163, #164): `sync_session_usage()` wrote token counts, cost, model, and title to `state.db` but never `message_count`. Both the streaming and sync chat paths now pass `len(s.messages)`. Note: `/insights` sync is opt-in — enable **Sync to Insights** in Settings (it's off by default).
+
+---
+
+## [v0.38.5] — 2026-04-06
+
+### Fixed
+- **Custom endpoint URL construction** (#138, #160): `base_url` ending in `/v1` was incorrectly stripped before appending `/models`, producing `http://host/models` instead of `http://host/v1/models`. Fixed to append directly.
+- **`custom_providers` config entries now appear in dropdown** (#138, #160): Models defined under `config.yaml` `custom_providers` (e.g. Ollama aliases, Azure model overrides) are now always included in the dropdown, even when the `/v1/models` endpoint is unreachable.
+- **Custom endpoint API key reads profile `.env`** (#138, #160): Custom endpoint auth now checks `~/.hermes/.env` keys in addition to `os.environ`.
+
+---
+
+## [v0.38.4] — 2026-04-06
+
+### Fixed
+- **Copilot false positive in model dropdown** (#158): `list_available_providers()` reported Copilot as available on any machine with `gh` CLI auth, because the Copilot token resolver falls back to `gh auth token`. The dropdown now skips any provider whose credential source is `'gh auth token'` — only explicit, dedicated credentials count. Users with `GITHUB_TOKEN` explicitly set in their `.env` still see Copilot correctly.
+
+---
+
+## [v0.38.3] — 2026-04-06
+
+### Fixed
+- **Model dropdown shows only configured providers** (#155): Provider detection now uses `hermes_cli.models.list_available_providers()` — the same auth check the Hermes agent uses at runtime — instead of scanning raw API key env vars. The dropdown now reflects exactly what the user has configured (auth.json, credential pools, OAuth flows like Copilot). When no providers are detected, shows only the configured default model rather than a full generic list. Added `copilot` and `gemini` to the curated model lists. Falls back to env var scanning for standalone installs without hermes-agent.
+
+---
+
+## [v0.38.2] — 2026-04-06
+
+### Fixed
+- **Tool cards actually render on page reload** (#140, #153): PR #149 fixed the wrong filter — it updated `vis` but not `visWithIdx` (the loop that actually creates DOM rows), so anchor rows were never inserted. This PR fixes `visWithIdx`. Additionally, `streaming.py`'s `assistant_msg_idx` builder previously only scanned Anthropic content-array format and produced `idx=-1` for all OpenAI-format tool calls (the format used in saved sessions); it now handles both. As a final fallback, `renderMessages()` now builds tool card data directly from per-message `tool_calls` arrays when `S.toolCalls` is empty, covering historical sessions that predate session-level tool tracking.
+
+---
+
+## [v0.38.1] — 2026-04-06
+
+### Fixed
+- **Model selector duplicates** (#147, #151): When `config.yaml` sets `model.default` with a provider prefix (e.g. `anthropic/claude-opus-4.6`), the model dropdown no longer shows a duplicate entry alongside the existing bare-ID entry. The dedup check now normalizes both sides before comparing.
+- **Stale model labels** (#147, #151): Sessions created with models no longer in the current provider list now show `"ModelName (unavailable)"` in muted text with a tooltip, instead of appearing as a normal selectable option that would fail silently on send.
+
+---
+
+## [v0.38.0] — 2026-04-06
+
+### Fixed
+- **Multi-provider model routing (#138):** Non-default provider models now use `@provider:model` format. `resolve_model_provider()` routes them through `resolve_runtime_provider(requested=provider)` — no OpenRouter fallback for users with direct provider keys.
+- **Personalities from config.yaml (#139):** `/api/personalities` reads from `config.yaml` `agent.personalities` (the documented mechanism). Personality prompts pass via `agent.ephemeral_system_prompt`.
+- **Tool call cards survive page reload (#140):** Assistant messages with only `tool_use` content are no longer filtered from the render list, preserving anchor rows for tool card display.
+
+---
+
+## [v0.37.0] /personality command, model prefix routing fix, tool card reload fix
+*April 6, 2026 | 465 tests*
+
+### Features
+- **`/personality` slash command.** Set a per-session agent personality from `~/.hermes/personalities/<name>/SOUL.md`. The personality prompt is prepended to the system message for every turn. Use `/personality <name>` to activate, `/personality none` to clear, `/personality` (no args) to list available personalities. Backend: `GET /api/personalities`, `POST /api/personality/set`. (PR #143)
+
+### Bug Fixes
+- **Model dropdown routes non-default provider models correctly (#138).** When the active provider is `anthropic` and you pick a `minimax` model, its ID is now prefixed `minimax/MiniMax-M2.7` so `resolve_model_provider()` can route it through OpenRouter. Guards added: `active_provider=None` prevents all-providers-prefixed, case is normalised, shared `_PROVIDER_MODELS` list is no longer mutated by the default_model injector. (PR #142)
+- **Tool call cards persist correctly after page reload.** The reload rendering logic now anchors cards AFTER the triggering assistant row (not before the next one), handles multi-step chains sharing a filtered anchor in chronological order, and filters fallback anchor to assistant rows only. (PR #141)
+
+---
+
+## [v0.36.3] Configurable Assistant Name
+*April 6, 2026 | 449 tests*
+
+### Features
+- **Configurable bot name.** New "Assistant Name" field in Settings panel.
+  Display name updates throughout the UI: sidebar, topbar, message roles,
+  login page, browser tab title, and composer placeholder. Defaults to
+  "Hermes". Configurable via settings or `HERMES_WEBUI_BOT_NAME` env var.
+  Server-side sanitization prevents empty names and escapes HTML for the
+  login page. (PR #135, based on #131 by @TaraTheStar)
+
+---
+
+## [v0.36.2] OpenRouter model routing fix
+*April 5, 2026 | 440 tests*
+
+### Bug Fixes
+- **OpenRouter models sent without prefix, causing 404 (#116).** `resolve_model_provider()` was stripping the `openrouter/` prefix from model IDs (e.g. sending `free` instead of `openrouter/free`) when `config_provider == 'openrouter'`. OpenRouter requires the full `provider/model` path to route upstream correctly. Fixed with an early return that preserves the complete model ID for all OpenRouter configs. (#127)
+- Added 7 unit tests for `resolve_model_provider()` — first coverage on this function. Tests the regression, cross-provider routing, direct-API prefix stripping, bare models, and empty model.
+
+---
+
+## [v0.36.1] Login form Enter key fix
+*April 5, 2026 | 433 tests*
+
+### Bug Fixes
+- **Login form Enter key unreliable in some browsers (#124).** `onsubmit="return doLogin(event)"` returned a Promise (async functions always return a truthy Promise), which could let the browser fall through to native form submission. Fixed with `doLogin(event);return false` plus an explicit `onkeydown` Enter handler on the password input as belt-and-suspenders. (#125)
+
+---
+
+## [v0.36] Self-Update Checker with One-Click Update
+*April 5, 2026 | 433 tests*
+
+### Features
+- **Update checker.** Non-blocking background check on boot detects when the
+  WebUI or hermes-agent git repos are behind upstream. Blue banner shows
+  "WebUI: N updates, Agent: N updates available" with Update Now / Later.
+- **One-click update.** "Update Now" runs `git stash && git pull --ff-only &&
+  git stash pop` on each behind repo, then reloads the page. Concurrent update
+  attempts blocked via lock. Dirty working trees safely stashed and restored.
+- **Settings toggle.** "Check for updates" checkbox in Settings panel. Persisted
+  server-side. Disabled = no background fetch, no banner.
+- **30-minute cache.** Git fetch runs at most twice per hour regardless of tab
+  count. Results cached server-side with TTL.
+- **Session-scoped dismissal.** "Later" dismisses banner for the current tab
+  session (sessionStorage). New tabs get a fresh check.
+- **Test mode.** `?test_updates=1` URL param shows the banner with fake data
+  (localhost only) for UI testing without needing to actually be behind.
+
+### Architecture
+- New `api/updates.py`: `check_for_updates()`, `apply_update()`. Thread-safe
+  caching with `_cache_lock`. Concurrent apply blocked with `_apply_lock`.
+  Default branch auto-detected (master/main).
+- `api/routes.py`: `GET /api/updates/check`, `POST /api/updates/apply`.
+  Simulate endpoint gated to 127.0.0.1.
+- `static/ui.js`: `_showUpdateBanner()`, `dismissUpdate()`, `applyUpdates()`.
+- `static/boot.js`: fire-and-forget check on boot (does not block UI).
+- `api/config.py`: `check_for_updates` in settings defaults + bool keys.
+- Docker safe: all git ops gated by `.git` directory existence check.
+
+---
+
+## [v0.35.1] Model dropdown fixes
+*April 5, 2026 | 433 tests*
+
+### Bug Fixes
+- **Custom providers invisible in model dropdown (#117).** `cfg_base_url` was scoped inside a conditional block but referenced unconditionally, causing a `NameError` for users with a `base_url` in config.yaml. Fix: initialize to `''` before the block. (#118)
+- **Configured default model missing from dropdown (#116).** OpenRouter and other providers replaced the model list with a hardcoded fallback that didn't include `model.default` values like `openrouter/free` or custom local model names. Fix: after building all groups, inject the configured `default_model` at the top of its provider group if absent. (#119)
+
+---
+
+## [v0.35] Security hardening
+*April 5, 2026 | 433 tests*
+
+### Security fixes
+- **ENV race condition (HIGH):** Two concurrent sessions could interleave `os.environ` writes, clobbering workspace and session keys. Fixed with a global `_ENV_LOCK` in `streaming.py` that serializes the env save/restore block across all sessions. (#108)
+- **Predictable signing key (MEDIUM):** Session cookies were signed with `sha256(STATE_DIR)` -- deterministic and forgeable if the install path is known. Now generates a cryptographically random 32-byte key on first startup, persisted to `STATE_DIR/.signing_key` (chmod 600). (#108)
+- **Upload path traversal (MEDIUM):** Filenames like `..` survived the `[^\w.\-]` sanitization regex because dots are allowed. Fixed by rejecting dot-only filenames and validating the resolved path stays within the workspace sandbox via `safe_resolve_ws()`. (#108)
+- **Weak password hashing (MEDIUM):** Bare SHA-256 with a predictable salt replaced with PBKDF2-SHA256 at 600k iterations (OWASP recommendation) using the random signing key as salt. No new dependencies (stdlib `hashlib.pbkdf2_hmac`). (#108)
+
+**Breaking change:** Existing session cookies and password hashes are invalidated on first restart after upgrade. Users with password auth enabled will need to re-set their password.
+
+---
+
+## [v0.34.3] Light theme final polish
+*April 5, 2026 | 433 tests*
+
+### Bug Fixes
+- **Light theme: sidebar, role labels, chips, and interactive elements all broken.** Session titles were too faint, active session used washed-out gold, pin stars were near-invisible bright yellow, and all hover/border effects used dark-theme white `rgba(255,255,255,.XX)` values invisible on cream. Fixed with 46 scoped `[data-theme="light"]` selector overrides covering session items, role labels, project chips, topbar chips, composer, suggestions, tool cards, cron list, and more. (#105)
+- Active session now uses blue accent (`#2d6fa3`) for strong contrast. Pin stars use deep gold (`#996b15`). Role labels are solid and high contrast.
+
+---
+
+## [v0.34.2] Theme text colors
+*April 5, 2026 | 433 tests*
+
+### Bug Fixes
+- **Light mode text unreadable.** Bold text was hardcoded white (invisible on cream), italic was light purple on cream, inline code had a dark box on a light background. Fixed by introducing 5 new per-theme CSS variables (`--strong`, `--em`, `--code-text`, `--code-inline-bg`, `--pre-text`) defined for every theme. (#102)
+- Also replaced remaining `rgba(255,255,255,.08)` border references with `var(--border)`, and darkened light theme `--code-bg` slightly for better contrast.
+
+---
+
+## [v0.34.1] Theme variable polish
+*April 5, 2026 | 433 tests*
+
+### Bug Fixes
+- **All non-dark themes had broken surfaces, topbar, and dropdowns.** 30+ hardcoded dark-navy rgba/hex values in style.css were stuck on the Dark palette regardless of active theme. Fixed by introducing 7 new CSS variables (`--surface`, `--topbar-bg`, `--main-bg`, `--input-bg`, `--hover-bg`, `--focus-ring`, `--focus-glow`) defined per-theme, replacing every hardcoded reference. (#100)
+
+---
+
+## [v0.34] Sprint 26 -- Pluggable UI Themes
+*April 5, 2026 | 433 tests*
+
+### Features
+- **6 built-in themes.** Dark (default), Light, Slate, Solarized Dark, Monokai,
+  Nord. Defined as CSS variable overrides on `:root[data-theme="name"]` — the
+  entire UI adapts automatically.
+- **Theme picker in Settings.** Dropdown with instant live preview. Changes
+  apply immediately as you click through options.
+- **`/theme` slash command.** `/theme dark`, `/theme light`, etc.
+- **Theme persistence.** Saved server-side in `settings.json` and client-side
+  in `localStorage` for flicker-free loading on page refresh.
+- **Flash prevention.** Inline `<script>` in `<head>` reads localStorage before
+  the stylesheet loads — no flash of the wrong theme.
+- **Custom theme support.** Any theme name is accepted (no enum gate). Create a
+  `:root[data-theme="name"]` CSS block and it works. See `THEMES.md`.
+- **Unsaved changes guard.** Settings panel now tracks dirty state and shows a
+  "You have unsaved changes" bar with Save/Discard buttons when closing with
+  unpersisted changes. Theme preview reverts on discard.
+
+### Architecture
+- `static/style.css`: 6 theme blocks using CSS variable overrides. Light theme
+  includes scrollbar and selection overrides.
+- `static/commands.js`: `/theme` command with validation.
+- `static/panels.js`: Settings dirty tracking, revert-on-discard, unsaved bar.
+- `static/boot.js`: Theme applied from server settings on boot.
+- `api/config.py`: `theme` field in `_SETTINGS_DEFAULTS` (no enum gate).
+- `THEMES.md`: Full documentation for creating custom themes.
+
+### Tests
+- 9 new tests in `test_sprint26.py`: default theme, round-trip persistence for
+  all 6 built-in themes, custom theme acceptance, settings isolation.
+  Total: **433 tests**.
+
+---
+
+## [v0.33] /insights Sync + state.db Bridge Fix
+*April 5, 2026 | 424 tests*
+
+### Features
+- **Opt-in `/insights` sync.** New "Sync usage to /insights" setting (default: off). When enabled, after each turn the WebUI mirrors session token usage, cost, model, and title into `state.db` so `hermes /insights` includes browser session activity. (#92, #93)
+
+### Bug Fixes
+- **state_sync.py correctness fixes.** Three bugs in the initial implementation caught during code review: wrong class name (`HermesState` → `SessionDB`), wrong constructor argument type (`str` → `Path`), wrong title update method (`_execute_write` with bad signature → `set_session_title`). Also fixed a SQLite connection leak (persistent connection opened per call, never closed). (#95)
+
+---
+
+## [v0.32] Auto-Compaction Handling + /compact Command (Issue #90)
+*April 5, 2026 | 424 tests*
+
+### Features
+- **Auto-compaction detection.** When the agent's `run_conversation()` triggers
+  context compression and rotates the session ID, the WebUI detects the mismatch
+  and renames the session file + cache entry so messages don't split across files.
+- **`compressed` SSE event.** Frontend receives a notification when compression
+  fires, shows a system message ("Context was auto-compressed") and a toast.
+- **`/compact` slash command.** Type `/compact` to request the agent compress
+  the conversation context. Sends a natural-language message that triggers the
+  agent's compression preflight.
+- **Real context window data.** The context usage indicator now uses actual
+  `context_length`, `threshold_tokens`, and `last_prompt_tokens` from the agent's
+  compressor instead of the client-side model name lookup. Tooltip shows the
+  auto-compress threshold. Hides gracefully when the agent has no compressor.
+
+### Architecture
+- `api/streaming.py`: Session ID mismatch detection after `run_conversation()`,
+  file rename, SESSIONS cache update under lock, `compressed` SSE event,
+  `context_length`/`threshold_tokens`/`last_prompt_tokens` in usage dict.
+- `static/commands.js`: `/compact` command.
+- `static/messages.js`: `compressed` SSE event handler.
+- `static/ui.js`: `_syncCtxIndicator()` rewritten to use server-side compressor
+  data instead of client-side model estimates.
+
+---
+
+## [v0.31.2] CLI session delete fix
+*April 5, 2026 | 424 tests*
+
+### Bug Fixes
+- **CLI sessions could not be deleted from the sidebar.** The delete handler only
+  removed the WebUI JSON session file, so CLI-backed sessions came back on refresh.
+  Added `delete_cli_session(sid)` in `api/models.py` and call it from
+  `/api/session/delete` so the SQLite `state.db` row and messages are removed too.
+  (#87, #88)
+
+### Notes
+- The public test suite still passes at 424/424.
+- Issue #87 already had a comment confirming the root cause, so no new issue comment
+  was needed here.
+
+## [v0.31] UI Polish + Deployment Hardening
+*April 4, 2026 | 424 tests*
+
+### Bug Fixes
+- **Profile dropdown overlaps chat messages.** `.topbar` had no stacking context,
+  causing the dropdown to paint over `.messages`. Added `position:relative;z-index:10`
+  to `.topbar`. (#71)
+- **Workspace dropdown clipped by sidebar.** `.sidebar overflow:hidden` swallowed
+  the upward-opening workspace dropdown entirely. Changed to `overflow:visible`
+  (scroll lives on `.session-list`); added `position:relative;z-index:10` to
+  `.sidebar-bottom`. (#71)
+- **Slash-command autocomplete behind tool cards.** `.composer-wrap` had
+  `position:relative` but no `z-index`, letting tool cards bleed over it.
+  Added `z-index:10`. (#71)
+- **Skill picker clipped inside Settings modal.** `.settings-panel overflow-y:auto`
+  clipped the absolute-positioned skill picker. Moved scroll to `.settings-body`,
+  set panel to `overflow:visible`, raised skill picker to `z-index:1100`. (#71)
+- **CLI session badge blocks action buttons on hover.** Added
+  `.session-item.cli-session:hover::after { display:none }` so the gold "cli"
+  label hides on hover, making archive/delete/pin fully reachable. (#71)
+- **Workspace dropdown name and path crowded on same line.** `.ws-opt` was a plain
+  block with inline spans. Added `flex-direction:column;gap:4px` so name and path
+  stack cleanly. (#71)
+- **Both servers sharing same state directory.** `api/config.py` and `start.sh`
+  both defaulted to `~/.hermes/webui-mvp` (an internal dev name). Changed default
+  to `~/.hermes/webui` -- generic, appropriate for any deployment. Override with
+  `HERMES_WEBUI_STATE_DIR`. (#72, #73)
 
 ---
 
@@ -70,7 +1298,7 @@
   command. Persists server-side across refreshes.
 
 - **Subagent delegation cards.** `subagent_progress` events now render with
-  a 🔀 icon and a blue indented left border to visually distinguish child
+  a shuffle icon and a blue indented left border to visually distinguish child
   tool activity from parent tool calls. `delegate_task` cards display as
   "Delegate task" with cleaner formatting.
 
@@ -866,9 +2094,9 @@ The sprint that closed the last gaps for heavy agentic use.
   restored from session history on reload. Shows tool name, preview, args, result snippet.
 - **Attachment metadata persists on reload.** File badges on user messages survive page
   refresh. Server stores filenames on the user message in session JSON.
-- **Todo list panel.** New checkmark tab in the sidebar. Shows current task list parsed
-  from the most recent todo tool result in message history. Status icons: pending (○),
-  in-progress (◉), completed (✓), cancelled (✗). Auto-refreshes when panel is active.
+- **Todo list panel.** New task-list tab in the sidebar. Shows current task list parsed
+  from the most recent todo tool result in message history. Status icons use Lucide
+  square, loader, check, and x states. Auto-refreshes when panel is active.
 - **Model preference persists.** Last-used model saved to localStorage. Restored on page
   load. New sessions inherit it automatically.
 
@@ -1068,4 +2296,7 @@ Three-panel layout: sessions sidebar, chat area, workspace panel.
 
 ---
 
-*Last updated: v0.30.1, April 4, 2026 | Tests: 424*
+*Last updated: v0.36, April 5, 2026 | Tests: 433*
+
+### Markdown sweep
+- ROADMAP.md, TESTING.md, SPRINTS.md, README.md, and THEMES.md refreshed to match v0.36 and 433 tests.

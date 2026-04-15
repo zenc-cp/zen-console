@@ -1,7 +1,7 @@
 """
 Sprint 1 test suite for the Hermes Web UI.
 
-Tests use the ISOLATED test server running on http://127.0.0.1:8788.
+Tests use the ISOLATED test server. Port is auto-derived per worktree (see conftest.py).
 Production server (port 8787) and your real conversations are never touched.
 Start the server before running:
     <repo>/start.sh
@@ -27,7 +27,7 @@ import pathlib
 # Allow importing server modules directly for unit tests
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent))
 
-BASE = "http://127.0.0.1:8788"  # test server (isolated from production)
+from tests._pytest_port import BASE
 
 
 # ──────────────────────────────────────────────
@@ -145,10 +145,13 @@ def test_session_update():
     """Create session, update workspace and model, verify persisted."""
     data, _ = post("/api/session/new", {})
     sid = data["session"]["session_id"]
+    current_ws = pathlib.Path(data["session"]["workspace"])
+    child_ws = current_ws / f"session-update-{uuid.uuid4().hex[:6]}"
+    child_ws.mkdir(parents=True, exist_ok=True)
 
     updated, status = post("/api/session/update", {
         "session_id": sid,
-        "workspace": "/tmp",
+        "workspace": str(child_ws),
         "model": "anthropic/claude-sonnet-4.6"
     })
     assert status == 200

@@ -9,11 +9,14 @@ cached paths in hermes-agent modules (skills_tool, cron/jobs) that snapshot
 HERMES_HOME at import time.
 """
 import json
+import logging
 import os
 import re
 import shutil
 import threading
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # ── Constants (match hermes_cli.profiles upstream) ─────────────────────────
 _PROFILE_ID_RE = re.compile(r'^[a-z0-9][a-z0-9_-]{0,63}$')
@@ -26,6 +29,7 @@ _CLONE_CONFIG_FILES = ['config.yaml', '.env', 'SOUL.md']
 # ── Module state ────────────────────────────────────────────────────────────
 _active_profile = 'default'
 _profile_lock = threading.Lock()
+_loaded_profile_env_keys: set[str] = set()
 
 def _resolve_base_hermes_home() -> Path:
     """Return the BASE ~/.hermes directory — the root that contains profiles/.
@@ -75,7 +79,7 @@ def _read_active_profile_file() -> str:
             if name:
                 return name
         except Exception:
-            pass
+            logger.debug("Failed to read active profile file")
     return 'default'
 
 
@@ -106,7 +110,7 @@ def _set_hermes_home(home: Path):
         _sk.HERMES_HOME = home
         _sk.SKILLS_DIR = home / 'skills'
     except (ImportError, AttributeError):
-        pass
+        logger.debug("Failed to patch skills_tool module")
 
     # Patch cron/jobs module-level cache
     try:
@@ -116,15 +120,28 @@ def _set_hermes_home(home: Path):
         _cj.JOBS_FILE = _cj.CRON_DIR / 'jobs.json'
         _cj.OUTPUT_DIR = _cj.CRON_DIR / 'output'
     except (ImportError, AttributeError):
-        pass
+        logger.debug("Failed to patch cron.jobs module")
 
 
 def _reload_dotenv(home: Path):
-    """Load .env from the profile dir into os.environ (additive)."""
+    """Load .env from the profile dir into os.environ with profile isolation.
+
+    Clears env vars that were loaded from the previously active profile before
+    applying the current profile's .env. This prevents API keys and other
+    profile-scoped secrets from leaking across profile switches.
+    """
+    global _loaded_profile_env_keys
+
+    # Remove keys loaded from the previous profile first.
+    for key in list(_loaded_profile_env_keys):
+        os.environ.pop(key, None)
+    _loaded_profile_env_keys = set()
+
     env_path = home / '.env'
     if not env_path.exists():
         return
     try:
+        loaded_keys: set[str] = set()
         for line in env_path.read_text().splitlines():
             line = line.strip()
             if line and not line.startswith('#') and '=' in line:
@@ -133,11 +150,14 @@ def _reload_dotenv(home: Path):
                 v = v.strip().strip('"').strip("'")
                 if k and v:
                     os.environ[k] = v
+                    loaded_keys.add(k)
+        _loaded_profile_env_keys = loaded_keys
     except Exception:
-        pass
+        _loaded_profile_env_keys = set()
+        logger.debug("Failed to reload dotenv from %s", env_path)
 
 
-def init_profile_state():
+def init_profile_state() -> None:
     """Initialize profile state at server startup.
 
     Reads ~/.hermes/active_profile, sets HERMES_HOME env var, patches
@@ -176,7 +196,7 @@ def switch_profile(name: str) -> dict:
     if name == 'default':
         home = _DEFAULT_HERMES_HOME
     else:
-        home = _DEFAULT_HERMES_HOME / 'profiles' / name
+        home = _resolve_named_profile_home(name)
         if not home.is_dir():
             raise ValueError(f"Profile '{name}' does not exist.")
 
@@ -190,7 +210,7 @@ def switch_profile(name: str) -> dict:
         ap_file = _DEFAULT_HERMES_HOME / 'active_profile'
         ap_file.write_text(name if name != 'default' else '')
     except Exception:
-        pass
+        logger.debug("Failed to write active profile file")
 
     # Reload config.yaml from the new profile
     reload_config()
@@ -267,6 +287,24 @@ def _validate_profile_name(name: str):
         )
 
 
+def _profiles_root() -> Path:
+    """Return the canonical root that contains named profiles."""
+    return (_DEFAULT_HERMES_HOME / 'profiles').resolve()
+
+
+def _resolve_named_profile_home(name: str) -> Path:
+    """Resolve a named profile to a directory under the profiles root.
+
+    Validates *name* as a logical profile identifier first, then resolves the
+    final filesystem path and enforces containment under ~/.hermes/profiles.
+    """
+    _validate_profile_name(name)
+    profiles_root = _profiles_root()
+    candidate = (profiles_root / name).resolve()
+    candidate.relative_to(profiles_root)
+    return candidate
+
+
 def _create_profile_fallback(name: str, clone_from: str = None,
                               clone_config: bool = False) -> Path:
     """Create a profile directory without hermes_cli (Docker/standalone fallback)."""
@@ -294,8 +332,38 @@ def _create_profile_fallback(name: str, clone_from: str = None,
     return profile_dir
 
 
+def _write_endpoint_to_config(profile_dir: Path, base_url: str = None, api_key: str = None) -> None:
+    """Write custom endpoint fields into config.yaml for a profile."""
+    if not base_url and not api_key:
+        return
+    config_path = profile_dir / 'config.yaml'
+    try:
+        import yaml as _yaml
+    except ImportError:
+        return
+    cfg = {}
+    if config_path.exists():
+        try:
+            loaded = _yaml.safe_load(config_path.read_text())
+            if isinstance(loaded, dict):
+                cfg = loaded
+        except Exception:
+            logger.debug("Failed to load config from %s", config_path)
+    model_section = cfg.get('model', {})
+    if not isinstance(model_section, dict):
+        model_section = {}
+    if base_url:
+        model_section['base_url'] = base_url
+    if api_key:
+        model_section['api_key'] = api_key
+    cfg['model'] = model_section
+    config_path.write_text(_yaml.dump(cfg, default_flow_style=False, allow_unicode=True))
+
+
 def create_profile_api(name: str, clone_from: str = None,
-                       clone_config: bool = False) -> dict:
+                       clone_config: bool = False,
+                       base_url: str = None,
+                       api_key: str = None) -> dict:
     """Create a new profile. Returns the new profile info dict."""
     _validate_profile_name(name)
     # Defense-in-depth: validate clone_from here too, even though routes.py
@@ -315,11 +383,26 @@ def create_profile_api(name: str, clone_from: str = None,
     except ImportError:
         _create_profile_fallback(name, clone_from, clone_config)
 
+    # Resolve the profile directory from the profile list when possible.
+    # hermes_cli and the webui runtime do not always agree on the exact root,
+    # so we prefer the path returned by list_profiles_api() and fall back to the
+    # standard profile location only if the profile cannot be found there yet.
+    profile_path = _DEFAULT_HERMES_HOME / 'profiles' / name
+    for p in list_profiles_api():
+        if p['name'] == name:
+            try:
+                profile_path = Path(p.get('path') or profile_path)
+            except Exception:
+                logger.debug("Failed to parse profile path")
+            break
+
+    profile_path.mkdir(parents=True, exist_ok=True)
+    _write_endpoint_to_config(profile_path, base_url=base_url, api_key=api_key)
+
     # Find and return the newly created profile info.
     # When hermes_cli is not importable, list_profiles_api() also falls back
     # to the stub default-only list and won't find the new profile by name.
     # In that case, return a complete profile dict directly.
-    profile_path = _DEFAULT_HERMES_HOME / 'profiles' / name
     for p in list_profiles_api():
         if p['name'] == name:
             return p
@@ -340,6 +423,7 @@ def delete_profile_api(name: str) -> dict:
     """Delete a profile. Switches to default first if it's the active one."""
     if name == 'default':
         raise ValueError("Cannot delete the default profile.")
+    _validate_profile_name(name)
 
     # If deleting the active profile, switch to default first
     if _active_profile == name:
@@ -357,7 +441,7 @@ def delete_profile_api(name: str) -> dict:
     except ImportError:
         # Manual fallback: just remove the directory
         import shutil
-        profile_dir = _DEFAULT_HERMES_HOME / 'profiles' / name
+        profile_dir = _resolve_named_profile_home(name)
         if profile_dir.is_dir():
             shutil.rmtree(str(profile_dir))
         else:
