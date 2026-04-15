@@ -357,7 +357,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             except Exception as _mem_err:
                 print(f"[webui] memory: index injection skipped ({_mem_err})", flush=True)
             # Watchdog: kill agent if it takes >120s (prevents thread exhaustion)
-            _agent_timeout = 120
+            _agent_timeout = 180
             _agent_result = [None]
             _agent_error = [None]
             def _run_agent_inner():
