@@ -1133,9 +1133,17 @@ def _handle_chat_start(handler, body):
 
 
 def _handle_chat_sync(handler, body):
-    """Fallback synchronous chat endpoint (POST /api/chat). Not used by frontend."""
+    """Synchronous chat endpoint (POST /api/chat). Used by hermes_client for programmatic calls."""
     from api.config import _get_session_agent_lock
-    s = get_session(body['session_id'])
+    sid = body.get('session_id', '').strip()
+    if not sid:
+        return bad(handler, 'session_id is required')
+    try:
+        s = get_session(sid)
+    except KeyError:
+        # Auto-create session for programmatic callers (hermes_client, Brain)
+        s = new_session(model=body.get('model'))
+        body['session_id'] = s.session_id
     msg = str(body.get('message', '')).strip()
     if not msg: return j(handler, {'error': 'empty message'}, status=400)
     workspace = Path(body.get('workspace') or s.workspace).expanduser().resolve()
