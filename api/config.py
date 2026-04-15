@@ -276,7 +276,7 @@ def _discover_default_workspace() -> Path:
 
 
 DEFAULT_WORKSPACE = _discover_default_workspace()
-DEFAULT_MODEL = os.getenv("HERMES_WEBUI_DEFAULT_MODEL", "openai/gpt-5.4-mini")
+DEFAULT_MODEL = os.getenv("HERMES_WEBUI_DEFAULT_MODEL", "minimax/minimax-m2.7")
 
 
 # ── Startup diagnostics ───────────────────────────────────────────────────────
@@ -405,7 +405,7 @@ CLI_TOOLSETS = get_config().get("platform_toolsets", {}).get("cli", _DEFAULT_TOO
 
 # Hardcoded fallback models (used when no config.yaml or agent is available)
 _FALLBACK_MODELS = [
-    {"provider": "OpenAI", "id": "openai/gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+    {"provider": "MiniMax", "id": "minimax/minimax-m2.7", "label": "MiniMax M2.7"},
     {"provider": "OpenAI", "id": "openai/o4-mini", "label": "o4-mini"},
     {
         "provider": "Anthropic",
@@ -625,9 +625,11 @@ def resolve_model_provider(model_id: str) -> tuple:
 
     if "/" in model_id:
         prefix, bare = model_id.split("/", 1)
-        # OpenRouter always needs the full provider/model path (e.g. openrouter/free,
-        # anthropic/claude-sonnet-4.6). Never strip the prefix for OpenRouter.
+        # OpenRouter needs vendor/model format (e.g. minimax/minimax-m2.7).
+        # Strip stale "openrouter/" prefix if present (legacy config artifact).
         if config_provider == "openrouter":
+            if prefix == "openrouter" and "/" in bare:
+                model_id = bare  # openrouter/minimax/minimax-m2.7 -> minimax/minimax-m2.7
             return model_id, "openrouter", config_base_url
         # If prefix matches config provider exactly, strip it and use that provider directly.
         # e.g. config=anthropic, model=anthropic/claude-... → bare name to anthropic API
