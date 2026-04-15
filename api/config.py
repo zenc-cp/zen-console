@@ -672,6 +672,32 @@ def get_available_models() -> dict:
     default_model = DEFAULT_MODEL
     groups = []
 
+    # 0. If config.yaml defines available_models, use ONLY those (skip auto-detection).
+    # This gives the operator full control over the dropdown.
+    cfg_available = cfg.get("available_models", [])
+    if isinstance(cfg_available, list) and cfg_available:
+        # Build a single OpenRouter group from the explicit list
+        models = []
+        for mid in cfg_available:
+            mid = str(mid).strip()
+            if not mid:
+                continue
+            # Strip stale openrouter/ prefix
+            if mid.startswith("openrouter/") and mid.count("/") >= 2:
+                mid = mid[len("openrouter/"):]
+            label = mid.split("/", 1)[-1] if "/" in mid else mid
+            models.append({"id": mid, "label": label})
+        if models:
+            # Ensure default_model doesn't have stale openrouter/ prefix
+            dm = default_model
+            if dm.startswith('openrouter/') and dm.count('/') >= 2:
+                dm = dm[len('openrouter/'):]
+            return {
+                "active_provider": "openrouter",
+                "default_model": dm,
+                "groups": [{"provider": "OpenRouter", "models": models}],
+            }
+
     # 1. Read config.yaml model section
     cfg_base_url = ""  # must be defined before conditional blocks (#117)
     model_cfg = cfg.get("model", {})
