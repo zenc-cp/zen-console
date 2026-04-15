@@ -327,6 +327,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 session_id=session_id,
                 stream_delta_callback=on_token,
                 tool_progress_callback=on_tool,
+                reasoning_callback=lambda t: put('thinking', {'text': t}),
             )
             # Prepend workspace context so the agent always knows which directory
             # to use for file operations, regardless of session age or AGENTS.md defaults.

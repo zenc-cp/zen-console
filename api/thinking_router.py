@@ -17,6 +17,7 @@ from typing import Callable
 _TAG_PAIRS = [
     ("<thinking>", "</thinking>"),  # OpenAI / Anthropic style
     ("<think>", "</think>"),        # Gemma 4, Qwen, DeepSeek-R1
+    ("<thought>", "</thought>"),    # Gemma 4 MoE variant
 ]
 
 # All possible opening tags and closing tags
