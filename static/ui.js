@@ -392,7 +392,7 @@ function getModelLabel(modelId){
   // Check dynamic labels first, then fall back to splitting the ID
   if(_dynamicModelLabels[modelId]) return _dynamicModelLabels[modelId];
   // Static fallback for common models
-  const STATIC_LABELS={'openai/gpt-5.4-mini':'GPT-5.4 Mini','openai/gpt-4o':'GPT-4o','openai/o3':'o3','openai/o4-mini':'o4-mini','anthropic/claude-sonnet-4.6':'Sonnet 4.6','anthropic/claude-sonnet-4-5':'Sonnet 4.5','anthropic/claude-haiku-3-5':'Haiku 3.5','google/gemini-2.5-pro':'Gemini 2.5 Pro','deepseek/deepseek-chat-v3-0324':'DeepSeek V3','meta-llama/llama-4-scout':'Llama 4 Scout'};
+  const STATIC_LABELS={'minimax/minimax-m2.7':'MiniMax M2.7','x-ai/grok-4.1-fast':'Grok 4.1 Fast','x-ai/grok-4.20':'Grok 4.20','x-ai/grok-3-mini-beta':'Grok 3 Mini','google/gemma-4-31b-it':'Gemma 4 31B','google/gemma-4-26b-a4b-it':'Gemma 4 26B MoE','z-ai/glm-5.1':'GLM 5.1','z-ai/glm-4.7-flash':'GLM 4.7 Flash','qwen/qwen3-235b-a22b-2507':'Qwen 3 235B','nvidia/nemotron-3-super-120b-a12b':'Nemotron 3 Super','nvidia/llama-3.3-nemotron-super-49b-v1.5':'Nemotron Llama 49B','meta-llama/llama-4-maverick':'Llama 4 Maverick','xiaomi/mimo-v2-flash':'MiMo V2 Flash','mistralai/mistral-small-3.1-24b-instruct':'Mistral Small 3.1'};
   if(STATIC_LABELS[modelId]) return STATIC_LABELS[modelId];
   return modelId.split('/').pop()||'Unknown';
 }
