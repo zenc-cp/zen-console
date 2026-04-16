@@ -70,7 +70,15 @@ def _sanitize_messages_for_api(messages):
         if not isinstance(msg, dict):
             continue
         sanitized = {k: v for k, v in msg.items() if k in _API_SAFE_MSG_KEYS}
-        if sanitized.get('role'):
+        # Flatten list content to string (MiniMax and some models reject structured content)
+        if isinstance(sanitized.get('content'), list):
+            parts = []
+            for block in sanitized['content']:
+                if isinstance(block, dict):
+                    parts.append(block.get('text', block.get('content', str(block))))
+                elif isinstance(block, str):
+                    parts.append(block)
+            sanitized['content'] = ' '.join(parts)
             clean.append(sanitized)
     return clean
 
