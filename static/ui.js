@@ -872,9 +872,13 @@ function clearInflight() {
 function showReconnectBanner(msg) {
   $('reconnectMsg').textContent = msg || 'A response may have been in progress when you last left.';
   $('reconnectBanner').classList.add('visible');
+  const retryBtn=$('#reconnectRetryBtn');
+  if(retryBtn) retryBtn.style.display='inline-block';
 }
 function dismissReconnect() {
   $('reconnectBanner').classList.remove('visible');
+  const retryBtn=$('#reconnectRetryBtn');
+  if(retryBtn) retryBtn.style.display='none';
   clearInflight();
 }
 async function refreshSession() {
@@ -1829,5 +1833,13 @@ async function uploadPendingFiles(){
   S.pendingFiles=[];renderTray();
   if(failures===total&&total>0)throw new Error(t('all_uploads_failed',total));
   return names;
+}
+
+function manualReconnect(){
+  const retryBtn=$('#reconnectRetryBtn');
+  const errorRetryBtn=$('#errorRetryBtn');
+  if(retryBtn) retryBtn.style.display='none';
+  if(errorRetryBtn) errorRetryBtn.style.display='none';
+  if(typeof refreshSession==='function') refreshSession();
 }
 

@@ -1451,7 +1451,7 @@ function showErrorBanner(){
   if(!latest){banner.style.display='none';return;}
   const count=_backgroundErrors.length;
   const msg=count>1?t('bg_error_multi',count):t('bg_error_single',latest.title);
-  banner.innerHTML=`<span>\u26a0 ${esc(msg)}</span><div style="display:flex;gap:6px;flex-shrink:0"><button class="reconnect-btn" onclick="navigateToErrorSession()">${esc(t('view'))}</button><button class="reconnect-btn" onclick="dismissErrorBanner()">${esc(t('dismiss'))}</button></div>`;
+banner.innerHTML=`<span>\u26a0 ${esc(msg)}</span><div style="display:flex;gap:6px;flex-shrink:0"><button class="reconnect-btn" onclick="navigateToErrorSession()">${esc(t('view'))}</button><button class="reconnect-btn" onclick="dismissErrorBanner()">${esc(t('dismiss'))}</button><button class="reconnect-btn" id="errorRetryBtn" onclick="manualReconnect()" style="display:none">Retry</button></div>`;
   banner.style.display='';
 }
 
@@ -1468,6 +1468,8 @@ function dismissErrorBanner(){
   _backgroundErrors.length=0;
   const banner=$('bgErrorBanner');
   if(banner) banner.style.display='none';
+  const errorRetryBtn=$('#errorRetryBtn');
+  if(errorRetryBtn) errorRetryBtn.style.display='none';
 }
 
 // Event wiring
