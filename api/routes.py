@@ -685,14 +685,14 @@ def handle_get(handler, parsed) -> bool:
         )
 
     # ── Background task routes ─────────────────────────────────────────────────
-    result = register_task_routes_post(parsed.path, handler, body)
+    result = register_task_routes_get(parsed.path, handler, parsed)
     if result is not None:
         return result
 
     return False  # 404
 
 
-# ── POST routes ───────────────────────────────────────────────────────────────
+# ── POST routes ────────────────────────────────────────────────────────────────
 
 
 def handle_post(handler, parsed) -> bool:
@@ -1266,7 +1266,7 @@ def handle_post(handler, parsed) -> bool:
         return True
 
     # ── Background task routes ─────────────────────────────────────────────────
-    result = register_task_routes_get(parsed.path, handler, parsed)
+    result = register_task_routes_post(parsed.path, handler, body)
     if result is not None:
         return result
 
