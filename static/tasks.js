@@ -455,10 +455,30 @@ setInterval(checkNotifications, 30000);
     }
 })();
 
+/* ─── Task panel toggle button ─────────────────────────────────────────────── */
+
+function createBgTasksButton() {
+    if (document.getElementById('btnBgTasks')) return;
+    var btn = document.createElement('button');
+    btn.id = 'btnBgTasks';
+    btn.innerHTML = '⏳';
+    btn.title = 'Background Tasks';
+    btn.style.cssText = [
+        'position:fixed;top:12px;right:116px;background:rgba(12,14,26,0.9);',
+        'border:1px solid #1e293b;border-radius:6px;width:32px;height:32px;',
+        'display:flex;align-items:center;justify-content:center;',
+        'cursor:pointer;z-index:1100;color:#64748b;font-size:14px;',
+        'transition:border-color 0.2s,color 0.2s;',
+    ].join('');
+    btn.onclick = toggleTaskPanel;
+    document.body.appendChild(btn);
+}
+
 /* ─── Init ───────────────────────────────────────────────────────────────── */
 
 function initTaskSystem() {
     createTaskListPanel();
+    createBgTasksButton();
     initBackgroundMode();
     // Restore any active tasks from previous session
     refreshTaskList();
