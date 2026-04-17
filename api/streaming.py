@@ -79,6 +79,12 @@ def _sanitize_messages_for_api(messages):
                 elif isinstance(block, str):
                     parts.append(block)
             sanitized['content'] = ' '.join(parts)
+        # Truncate large tool outputs to prevent context bloat
+        if sanitized.get('role') == 'tool':
+            content = sanitized.get('content', '')
+            if isinstance(content, str) and len(content) > 4000:
+                sanitized['content'] = content[:3800] + '\n... [truncated ' + str(len(content)) + ' chars]'
+        if sanitized.get('role'):
             clean.append(sanitized)
     return clean
 
