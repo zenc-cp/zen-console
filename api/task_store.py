@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     progress      TEXT NOT NULL DEFAULT '{}',
     error         TEXT NOT NULL DEFAULT '',
     notify_config TEXT NOT NULL DEFAULT '{}',
+    profile       TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL,
     started_at    TEXT NOT NULL DEFAULT '',
     completed_at  TEXT NOT NULL DEFAULT '',
@@ -100,6 +101,7 @@ class TaskStore:
         workspace: str,
         attachments=None,
         notify_config=None,
+        profile=None,
     ) -> dict:
         task_id = uuid.uuid4().hex[:12]
         created_at = _utcnow()
@@ -109,11 +111,11 @@ class TaskStore:
             """
             INSERT INTO tasks
                 (task_id, session_id, status, prompt, model, workspace,
-                 attachments, notify_config, created_at)
-            VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?)
+                 attachments, notify_config, profile, created_at)
+            VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)
             """,
             (task_id, session_id, prompt, model, workspace,
-             attachments_json, notify_json, created_at),
+             attachments_json, notify_json, profile or '', created_at),
         )
         return self.get_task(task_id)
 

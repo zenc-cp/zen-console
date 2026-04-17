@@ -145,6 +145,18 @@ def main() -> None:
     except Exception as e:
         print(f'[!!] WARNING: Gateway watcher failed to start: {e}', flush=True)
 
+    # Start the background task worker and sweeper
+    try:
+        from api.task_integration import init_task_system
+        from api.task_sweeper import start_task_sweeper
+        from api.task_store import get_task_store
+        from api.config import STREAMS, STREAMS_LOCK
+        init_task_system()
+        start_task_sweeper(get_task_store(), STREAMS, STREAMS_LOCK)
+        print('  [ok] Background task system started', flush=True)
+    except Exception as e:
+        print(f'[!!] WARNING: Background task system failed to start: {e}', flush=True)
+
     httpd = QuietHTTPServer((HOST, PORT), Handler)
 
     # ── TLS/HTTPS setup (optional) ─────────────────────────────────────────

@@ -54,6 +54,8 @@ from api.helpers import (
     _redact_text,
 )
 
+from api.task_routes import register_task_routes_post, register_task_routes_get
+
 # ── CSRF: validate Origin/Referer on POST ────────────────────────────────────
 import re as _re
 
@@ -682,6 +684,11 @@ def handle_get(handler, parsed) -> bool:
             {"name": get_active_profile_name(), "path": str(get_active_hermes_home())},
         )
 
+    # ── Background task routes ─────────────────────────────────────────────────
+    result = register_task_routes_post(parsed.path, handler, body)
+    if result is not None:
+        return result
+
     return False  # 404
 
 
@@ -1257,6 +1264,11 @@ def handle_post(handler, parsed) -> bool:
         handler.end_headers()
         handler.wfile.write(json.dumps({"ok": True}).encode())
         return True
+
+    # ── Background task routes ─────────────────────────────────────────────────
+    result = register_task_routes_get(parsed.path, handler, parsed)
+    if result is not None:
+        return result
 
     return False  # 404
 
