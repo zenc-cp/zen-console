@@ -1120,3 +1120,26 @@ body.resizing{user-select:none;cursor:col-resize;}
 .session-item.cli-session[data-source="discord"]::after { color: #5865F2; }
 .session-item.cli-session[data-source="slack"] { border-left-color: #4A154B; }
 .session-item.cli-session[data-source="slack"]::after { color: #4A154B; }
+
+/* ── Background task badge on Tasks nav tab ── */
+#bgTaskBadge {
+  display: none;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  pointer-events: none;
+  animation: bgTaskPulse 2s ease-in-out infinite;
+}
+@keyframes bgTaskPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Light theme: ensure badge is visible */
+:root[data-theme="light"] #bgTaskBadge {
+  background: #16a34a;
+}

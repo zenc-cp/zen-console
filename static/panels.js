@@ -77,9 +77,181 @@ async function loadCrons() {
       loadCronOutput(job.id);
     }
   } catch(e) { box.innerHTML = `<div style="padding:12px;color:var(--accent);font-size:12px">${esc(t('error_prefix'))}${esc(e.message)}</div>`; }
+
+  // Also load background tasks
+  await loadBgTasks();
 }
 
 let _cronSelectedSkills=[];
+let _bgTaskModelOptionsLoaded=false;
+
+// ── Background Tasks ───────────────────────────────────────────────────────────
+
+async function loadBgTasks() {
+  const box = $('bgTaskList');
+  if (!box) return;
+  try {
+    const data = await api('/api/tasks?limit=30');
+    const all = data.tasks || [];
+    const now = Date.now();
+
+    // Active = running or pending; recent = completed/failed/cancelled (within 24h)
+    const active = all.filter(t => t.status === 'running' || t.status === 'pending');
+    const recent = all.filter(t =>
+      ['completed','failed','cancelled'].includes(t.status) &&
+      t.created_at && (now - new Date(t.created_at).getTime() < 86400 * 1000)
+    ).slice(0, 15);
+
+    // Badge: green dot when any active tasks
+    const badge = $('bgTaskBadge');
+    if (badge) {
+      badge.style.display = active.length > 0 ? 'block' : 'none';
+    }
+
+    // Populate model dropdown once
+    if (!_bgTaskModelOptionsLoaded) {
+      _bgTaskModelOptionsLoaded = true;
+      try {
+        const models = await api('/api/models');
+        const sel = $('bgTaskModel');
+        if (sel && models.models) {
+          models.models.slice(0, 20).forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m.id || m.name || '';
+            opt.textContent = (m.id || m.name || '') + (m.provider ? ` (${m.provider})` : '');
+            sel.appendChild(opt);
+          });
+        }
+      } catch (_) {}
+    }
+
+    if (!active.length && !recent.length) {
+      box.innerHTML = `<div style="padding:14px 12px;color:var(--muted);font-size:12px;text-align:center">No recent background tasks.<br>Use the form above to run one.</div>`;
+      return;
+    }
+
+    let html = '';
+
+    // Active tasks
+    if (active.length) {
+      html += `<div style="padding:4px 12px 2px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">Active — ${active.length}</div>`;
+      active.forEach(t => {
+        const prompt = esc((t.prompt || '').slice(0, 120));
+        const id = esc(t.task_id || '');
+        const spinner = t.status === 'running'
+          ? `<span style="color:#60a5fa;font-size:11px">● Running</span>`
+          : `<span style="color:#facc15;font-size:11px">◌ Pending</span>`;
+        html += `
+<div style="border-top:1px solid var(--border);padding:7px 12px;display:flex;flex-direction:column;gap:4px">
+  <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${prompt}</div>
+  <div style="display:flex;align-items:center;justify-content:space-between">
+    ${spinner}
+    <div style="display:flex;gap:4px">
+      <button class="cron-btn" style="padding:2px 8px;font-size:10px" onclick="watchBgTask('${id}')">👁 Watch</button>
+      <button class="cron-btn" style="padding:2px 8px;font-size:10px" onclick="cancelBgTask('${id}')">✕ Cancel</button>
+    </div>
+  </div>
+</div>`;
+      });
+    }
+
+    // Recent tasks
+    if (recent.length) {
+      html += `<div style="padding:6px 12px 2px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">Recent</div>`;
+      recent.forEach(t => {
+        const prompt = esc((t.prompt || '').slice(0, 100));
+        const id = esc(t.task_id || '');
+        const doneAt = t.completed_at ? new Date(t.completed_at).toLocaleString() : '';
+        let badge = '', extra = '';
+        if (t.status === 'completed') {
+          badge = `<span style="font-size:10px;padding:1px 7px;border-radius:99px;background:rgba(34,197,94,.15);color:#4ade80">✓ Done</span>`;
+        } else if (t.status === 'failed') {
+          badge = `<span style="font-size:10px;padding:1px 7px;border-radius:99px;background:rgba(239,68,68,.15);color:#f87171">✗ Failed</span>`;
+        } else {
+          badge = `<span style="font-size:10px;padding:1px 7px;border-radius:99px;background:rgba(100,116,139,.15);color:#94a3b8">✕ ${esc(t.status)}</span>`;
+        }
+        html += `
+<div style="border-top:1px solid var(--border);padding:6px 12px;display:flex;flex-direction:column;gap:4px">
+  <div style="display:flex;align-items:center;gap:6px;justify-content:space-between">
+    <span style="font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">${prompt}</span>
+    ${badge}
+  </div>
+  <div style="display:flex;align-items:center;justify-content:space-between">
+    <span style="font-size:10px;color:var(--muted)">${esc(doneAt)}</span>
+    <div style="display:flex;gap:4px">
+      ${t.status === 'failed' ? `<button class="cron-btn" style="padding:2px 8px;font-size:10px" onclick="retryBgTask('${id}')">↻ Retry</button>` : ''}
+      ${t.status === 'completed' ? `<button class="cron-btn" style="padding:2px 8px;font-size:10px" onclick="viewBgTaskResult('${id}')">📄 Result</button>` : ''}
+      <button class="cron-btn" style="padding:2px 8px;font-size:10px" onclick="watchBgTask('${id}')">👁 View</button>
+    </div>
+  </div>
+</div>`;
+      });
+    }
+
+    box.innerHTML = html;
+  } catch(e) {
+    if (box) box.innerHTML = `<div style="padding:12px;color:var(--accent);font-size:12px">${esc(t('error_prefix'))}${esc(e.message)}</div>`;
+  }
+}
+
+async function submitBgTask() {
+  const prompt = $('bgTaskPrompt').value.trim();
+  const sessionId = $('bgTaskSession').value.trim() || 'background';
+  const model = $('bgTaskModel').value;
+  const errEl = $('bgTaskError');
+  errEl.style.display = 'none';
+  if (!prompt) { errEl.textContent = 'Prompt is required'; errEl.style.display = ''; return; }
+  try {
+    await api('/api/task/submit', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId, message: prompt, model })
+    });
+    $('bgTaskPrompt').value = '';
+    showToast('Task submitted — runs even without browser open');
+    await loadBgTasks();
+  } catch(e) { errEl.textContent = t('error_prefix') + e.message; errEl.style.display = ''; }
+}
+
+function watchBgTask(taskId) {
+  watchTask(taskId);
+}
+
+async function viewBgTaskResult(taskId) {
+  try {
+    const data = await api('/api/task/result?task_id=' + encodeURIComponent(taskId));
+    if (!data.result && !data.error) return;
+    const content = data.result || `[Error]\n${data.error}`;
+    // Show in a simple modal
+    const modal = document.createElement('div');
+    modal.style = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+    modal.innerHTML = `
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:640px;max-height:80vh;display:flex;flex-direction:column">
+  <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+    <span style="font-size:13px;font-weight:600">Task result</span>
+    <button onclick="this.closest('div').parentElement.remove()" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:16px">✕</button>
+  </div>
+  <pre style="flex:1;overflow:auto;padding:16px;margin:0;font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-word;font-family:monospace">${esc(content)}</pre>
+</div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  } catch(e) { showToast('Could not load result: ' + e.message); }
+}
+
+async function cancelBgTask(taskId) {
+  try {
+    await api('/api/task/cancel', { method: 'POST', body: JSON.stringify({ task_id: taskId }) });
+    showToast('Task cancelled');
+    await loadBgTasks();
+  } catch(e) { showToast('Cancel failed: ' + e.message); }
+}
+
+async function retryBgTask(taskId) {
+  try {
+    await api('/api/task/retry', { method: 'POST', body: JSON.stringify({ task_id: taskId }) });
+    showToast('Task re-queued');
+    await loadBgTasks();
+  } catch(e) { showToast('Retry failed: ' + e.message); }
+}
 let _cronSkillsCache=null;
 
 function toggleCronForm(){
