@@ -31,11 +31,17 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at    TEXT NOT NULL,
     started_at    TEXT NOT NULL DEFAULT '',
     completed_at  TEXT NOT NULL DEFAULT '',
-    cancelled_at  TEXT NOT NULL DEFAULT ''
+    cancelled_at  TEXT NOT NULL DEFAULT '',
+    updated_at    TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);
+"""
+
+# Migration: add updated_at column to existing DBs
+_MIGRATION = """
+ALTER TABLE tasks ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
 """
 
 _JSON_FIELDS = ('attachments', 'progress', 'notify_config')
@@ -56,6 +62,11 @@ class TaskStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
+        # Run migration for existing DBs
+        try:
+            self._conn.executescript(_MIGRATION)
+        except Exception:
+            pass  # column already exists
         self._conn.commit()
 
     # ── helpers ──────────────────────────────────────────────────────────────
@@ -125,7 +136,7 @@ class TaskStore:
 
     def update_status(self, task_id: str, status: str, **kwargs) -> bool:
         """Update status plus any extra fields (started_at, completed_at, error, etc.)."""
-        fields = {'status': status}
+        fields = {'status': status, 'updated_at': _utcnow()}
         fields.update(kwargs)
         set_clause = ', '.join(f"{k} = ?" for k in fields)
         values = list(fields.values()) + [task_id]
@@ -137,16 +148,16 @@ class TaskStore:
 
     def update_progress(self, task_id: str, progress: dict) -> bool:
         cur = self._execute(
-            "UPDATE tasks SET progress = ? WHERE task_id = ?",
-            (json.dumps(progress), task_id),
+            "UPDATE tasks SET progress = ?, updated_at = ? WHERE task_id = ?",
+            (json.dumps(progress), _utcnow(), task_id),
         )
         return cur.rowcount > 0
 
     def set_result(self, task_id: str, result: str, status: str = 'completed') -> bool:
         completed_at = _utcnow()
         cur = self._execute(
-            "UPDATE tasks SET result = ?, status = ?, completed_at = ? WHERE task_id = ?",
-            (result, status, completed_at, task_id),
+            "UPDATE tasks SET result = ?, status = ?, completed_at = ?, updated_at = ? WHERE task_id = ?",
+            (result, status, completed_at, completed_at, task_id),
         )
         return cur.rowcount > 0
 
@@ -155,10 +166,10 @@ class TaskStore:
         cancelled_at = _utcnow()
         cur = self._execute(
             """
-            UPDATE tasks SET status = 'cancelled', cancelled_at = ?
+            UPDATE tasks SET status = 'cancelled', cancelled_at = ?, updated_at = ?
             WHERE task_id = ? AND status IN ('queued', 'running')
             """,
-            (cancelled_at, task_id),
+            (cancelled_at, cancelled_at, task_id),
         )
         return cur.rowcount > 0
 

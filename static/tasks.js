@@ -46,7 +46,7 @@ function escapeHtml(s) {
 
 function initBackgroundMode() {
     // Create toggle button
-    const toggle = document.createElement('button');
+    var toggle = document.createElement('button');
     toggle.id = 'bgModeToggle';
     toggle.innerHTML = '⚡';
     toggle.title = 'Background mode: OFF';
@@ -61,6 +61,12 @@ function initBackgroundMode() {
         toggle.style.borderColor = bgMode ? '#00ff88' : '#334155';
         toggle.style.color = bgMode ? '#00ff88' : '#64748b';
         toggle.title = 'Background mode: ' + (bgMode ? 'ON' : 'OFF');
+        // Show/hide the composer bg banner
+        var banner = document.getElementById('bgModeBanner');
+        if (banner) banner.style.display = bgMode ? 'flex' : 'none';
+        // Change composer border to indicate bg mode
+        var wrap = document.getElementById('composerWrap');
+        if (wrap) wrap.style.borderColor = bgMode ? 'rgba(255,204,0,0.5)' : '';
         showTaskToast(
             bgMode
                 ? 'Background mode ON — tasks run without browser'
@@ -78,6 +84,21 @@ function initBackgroundMode() {
         } else {
             composerRight.appendChild(toggle);
         }
+    }
+
+    // Create background mode banner above the composer
+    var banner = document.createElement('div');
+    banner.id = 'bgModeBanner';
+    banner.style.cssText = [
+        'display:none;align-items:center;gap:6px;',
+        'background:rgba(255,204,0,0.08);border:1px solid rgba(255,204,0,0.25);',
+        'border-radius:4px;padding:4px 10px;margin-bottom:4px;',
+        'font-family:monospace;font-size:10px;color:#ffcc00;',
+    ].join('');
+    banner.innerHTML = '<span>⚡ BG MODE</span><span style="color:#64748b;font-size:9px;">Tasks run in background — close tab safely</span>';
+    var composerBox = document.getElementById('composerBox');
+    if (composerBox) {
+        composerBox.parentElement.insertBefore(banner, composerBox);
     }
 }
 
@@ -117,15 +138,18 @@ function createTaskListPanel() {
     var panel = document.createElement('div');
     panel.id = 'taskListPanel';
     panel.style.cssText = [
-        'display:none;position:fixed;bottom:60px;right:16px;width:320px;',
-        'max-height:400px;overflow-y:auto;background:rgba(12,14,26,0.95);',
+        'display:none;position:fixed;bottom:60px;right:16px;width:360px;',
+        'max-height:450px;overflow-y:auto;background:rgba(12,14,26,0.97);',
         'border:1px solid #1e293b;border-radius:8px;padding:12px;',
         "font-family:'Press Start 2P',monospace;z-index:600;",
     ].join('');
     panel.innerHTML =
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
         '  <span style="color:#00ff88;font-size:8px;">⏳ BACKGROUND TASKS</span>' +
-        '  <button onclick="toggleTaskPanel()" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:10px;">✕</button>' +
+        '  <div style="display:flex;gap:6px;align-items:center;">' +
+        '    <span id="taskCountBadge" style="color:#64748b;font-size:7px;"></span>' +
+        '    <button onclick="toggleTaskPanel()" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:10px;">✕</button>' +
+        '  </div>' +
         '</div>' +
         '<div id="taskListContent" style="font-size:7px;color:#94a3b8;"></div>';
     document.body.appendChild(panel);
@@ -167,35 +191,50 @@ function renderTaskCard(task) {
         (task.prompt && task.prompt.substring(0, 80)) || '';
     var tokens = (task.progress && task.progress.tokens) || 0;
 
+    // Duration display
+    var duration = '';
+    if (task.started_at) {
+        var startTime = new Date(task.started_at).getTime();
+        var endTime = task.completed_at ? new Date(task.completed_at).getTime() : Date.now();
+        var durSec = Math.floor((endTime - startTime) / 1000);
+        if (durSec < 60) duration = durSec + 's';
+        else if (durSec < 3600) duration = Math.floor(durSec/60) + 'm' + (durSec%60 < 10 ? '0' : '') + (durSec%60) + 's';
+        else duration = Math.floor(durSec/3600) + 'h' + Math.floor((durSec%3600)/60) + 'm';
+    }
+
     var watchBtn = task.status === 'running'
         ? '<button onclick="event.stopPropagation();watchTask(\'' + task.task_id + '\')" ' +
           'style="background:none;border:1px solid #00ff88;color:#00ff88;border-radius:2px;' +
-          'padding:2px 6px;margin-top:4px;cursor:pointer;font-size:5px;margin-right:4px;">Watch Live</button>'
+          'padding:2px 6px;margin-top:4px;cursor:pointer;font-size:6px;margin-right:4px;">Watch Live</button>'
         : '';
     var cancelBtn = (task.status === 'queued' || task.status === 'running')
         ? '<button onclick="event.stopPropagation();cancelTask(\'' + task.task_id + '\')" ' +
           'style="background:none;border:1px solid #ff4488;color:#ff4488;border-radius:2px;' +
-          'padding:2px 6px;margin-top:4px;cursor:pointer;font-size:5px;">Cancel</button>'
+          'padding:2px 6px;margin-top:4px;cursor:pointer;font-size:6px;">Cancel</button>'
         : '';
     var retryBtn = task.status === 'failed'
         ? '<button onclick="event.stopPropagation();retryTask(\'' + task.task_id + '\')" ' +
           'style="background:none;border:1px solid #ffcc00;color:#ffcc00;border-radius:2px;' +
-          'padding:2px 6px;margin-top:4px;cursor:pointer;font-size:5px;">Retry</button>'
+          'padding:2px 6px;margin-top:4px;cursor:pointer;font-size:6px;">Retry</button>'
         : '';
     var tokenLine = task.status === 'running'
-        ? '<div style="color:#ffcc00;margin-top:2px;">' + tokens + ' tokens</div>'
+        ? '<div style="color:#ffcc00;margin-top:2px;">' + tokens + ' tokens' + (duration ? ' · ' + duration : '') + '</div>'
+        : '';
+    // Duration line for completed/failed
+    var durationLine = (task.status !== 'running' && duration)
+        ? '<div style="color:#475569;margin-top:2px;font-size:6px;">⏱ ' + duration + '</div>'
         : '';
     var previewLine = task.status === 'completed'
         ? '<div style="color:#64748b;margin-top:2px;overflow:hidden;text-overflow:ellipsis;">' +
-          escapeHtml(preview.substring(0, 80)) + '</div>'
+          escapeHtml(preview.substring(0, 100)) + '</div>'
         : '';
-    // Context line: workspace + profile
-    var contextParts = [];
-    if (task.workspace) contextParts.push('📂 ' + escapeHtml(task.workspace.split('/').pop()));
-    if (task.profile) contextParts.push('👤 ' + escapeHtml(task.profile));
-    if (task.model) contextParts.push('🤖 ' + escapeHtml(task.model.split('/').pop()));
-    var contextLine = contextParts.length
-        ? '<div style="color:#475569;margin-top:2px;font-size:5px;">' + contextParts.join(' &middot; ') + '</div>'
+    // Context badges: workspace + profile + model
+    var badges = [];
+    if (task.workspace) badges.push('<span style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.25);border-radius:2px;padding:1px 3px;font-size:5px;color:#00ff88;">📂 ' + escapeHtml(task.workspace.split('/').pop()) + '</span>');
+    if (task.profile) badges.push('<span style="background:rgba(100,116,139,0.15);border:1px solid rgba(100,116,139,0.25);border-radius:2px;padding:1px 3px;font-size:5px;color:#94a3b8;">👤 ' + escapeHtml(task.profile) + '</span>');
+    if (task.model) badges.push('<span style="background:rgba(255,204,0,0.1);border:1px solid rgba(255,204,0,0.25);border-radius:2px;padding:1px 3px;font-size:5px;color:#ffcc00;">🤖 ' + escapeHtml(task.model.split('/').pop()) + '</span>');
+    var badgeLine = badges.length
+        ? '<div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap;">' + badges.join('') + '</div>'
         : '';
 
     return '<div class="task-card" data-task-id="' + task.task_id + '" style="' +
@@ -207,14 +246,13 @@ function renderTaskCard(task) {
         '    <span style="color:#475569;font-size:5px;">' + escapeHtml(task.task_id) + '</span>' +
         '  </div>' +
         '  <div style="color:#94a3b8;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
-        escapeHtml((task.prompt || '').substring(0, 60)) +
+        escapeHtml((task.prompt || '').substring(0, 80)) +
         '  </div>' +
         tokenLine +
+        durationLine +
         previewLine +
-        contextLine +
-        watchBtn +
-        cancelBtn +
-        retryBtn +
+        badgeLine +
+        '  <div style="margin-top:4px;">' + watchBtn + cancelBtn + retryBtn + '</div>' +
         '</div>';
 }
 
@@ -302,6 +340,16 @@ async function refreshTaskList() {
                 el.innerHTML = '<div style="text-align:center;color:#475569;padding:1rem;">No background tasks</div>';
             } else {
                 el.innerHTML = visible.map(renderTaskCard).join('');
+            }
+            // Update count badge
+            var badge = document.getElementById('taskCountBadge');
+            if (badge) {
+                var counts = {running: 0, queued: 0, completed: 0};
+                res.tasks.forEach(function(t) { if (counts[t.status] !== undefined) counts[t.status]++; });
+                var parts = [];
+                if (counts.running) parts.push('⚙️' + counts.running);
+                if (counts.queued) parts.push('⏳' + counts.queued);
+                badge.textContent = parts.join(' ') || '';
             }
             // Resume polling for active tasks
             res.tasks.forEach(function (t) {
@@ -468,6 +516,31 @@ setInterval(checkNotifications, 30000);
 
 /* ── Floating running-task status bar ─────────────────────────────────────── */
 
+function _formatElapsed(startedAt) {
+    if (!startedAt) return '';
+    try {
+        var start = new Date(startedAt).getTime();
+        var now = Date.now();
+        var sec = Math.floor((now - start) / 1000);
+        if (sec < 60) return sec + 's';
+        var m = Math.floor(sec / 60);
+        var s = sec % 60;
+        return m + 'm' + (s < 10 ? '0' : '') + s + 's';
+    } catch(e) { return ''; }
+}
+
+function _startElapsedTicker() {
+    if (window._elapsedTicker) return;
+    window._elapsedTicker = setInterval(function() {
+        var bar = document.getElementById('runningTaskBar');
+        if (!bar || bar.style.display === 'none') return;
+        // Update all elapsed displays
+        bar.querySelectorAll('[data-elapsed-start]').forEach(function(el) {
+            el.textContent = _formatElapsed(el.getAttribute('data-elapsed-start'));
+        });
+    }, 1000);
+}
+
 function updateRunningTaskBar() {
     var bar = document.getElementById('runningTaskBar');
     // Fetch all tasks to find running ones
@@ -486,9 +559,8 @@ function updateRunningTaskBar() {
             bar.id = 'runningTaskBar';
             bar.style.cssText = [
                 'position:sticky;top:0;z-index:500;',
-                'background:rgba(12,14,26,0.95);border-bottom:1px solid #1e293b;',
-                'padding:4px 12px;display:flex;align-items:center;gap:12px;',
-                'font-family:monospace;font-size:10px;color:#94a3b8;',
+                'background:rgba(12,14,26,0.97);border-bottom:1px solid #1e293b;',
+                'padding:6px 12px;font-family:monospace;font-size:10px;color:#94a3b8;',
             ].join('');
             // Insert above the chat messages area
             var msgInner = document.getElementById('msgInner');
@@ -502,17 +574,53 @@ function updateRunningTaskBar() {
             var tokens = (t.progress && t.progress.tokens) || 0;
             var tool = (t.progress && t.progress.current_tool) || '';
             var preview = (t.progress && t.progress.preview) || '';
-            var statusDetail = tool ? ' 🔧 ' + escapeHtml(tool) : (tokens ? ' ' + tokens + ' tok' : '');
-            var previewSnippet = preview ? escapeHtml(preview.substring(preview.length - 60)) : '';
-            html += '<span style="color:#ffcc00;">⚙️ ' + escapeHtml((t.prompt || '').substring(0, 40)) + statusDetail + '</span>';
-            if (previewSnippet) html += '<span style="color:#475569;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + previewSnippet + '</span>';
-            html += '<button onclick="event.stopPropagation();watchTask(\'' + t.task_id + '\')" style="background:none;border:1px solid #00ff88;color:#00ff88;border-radius:2px;padding:1px 4px;cursor:pointer;font-size:8px;">Watch</button>';
+            var elapsed = _formatElapsed(t.started_at);
+            var elapsedAttr = t.started_at ? ' data-elapsed-start="' + escapeHtml(t.started_at) + '"' : '';
+
+            // Workspace badge
+            var ws = t.workspace ? escapeHtml(t.workspace.split('/').pop()) : '';
+            var wsBadge = ws ? '<span style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);border-radius:3px;padding:1px 4px;margin-right:6px;font-size:8px;color:#00ff88;">📂 ' + ws + '</span>' : '';
+
+            // Profile badge
+            var prof = t.profile ? escapeHtml(t.profile) : '';
+            var profBadge = prof ? '<span style="background:rgba(100,116,139,0.2);border:1px solid rgba(100,116,139,0.3);border-radius:3px;padding:1px 4px;margin-right:6px;font-size:8px;color:#94a3b8;">👤 ' + prof + '</span>' : '';
+
+            // Model badge
+            var mdl = t.model ? escapeHtml(t.model.split('/').pop()) : '';
+            var mdlBadge = mdl ? '<span style="background:rgba(255,204,0,0.1);border:1px solid rgba(255,204,0,0.3);border-radius:3px;padding:1px 4px;margin-right:6px;font-size:8px;color:#ffcc00;">🤖 ' + mdl + '</span>' : '';
+
+            // Tool line (prominent)
+            var toolLine = tool
+                ? '<div style="margin-top:3px;display:flex;align-items:center;gap:6px;">' +
+                  '<span style="color:#ffcc00;font-size:9px;">🔧 ' + escapeHtml(tool) + '</span>' +
+                  '<span style="color:#475569;">|</span>' +
+                  '<span style="color:#64748b;">' + tokens + ' tokens</span>' +
+                  '</div>'
+                : (tokens ? '<div style="margin-top:3px;color:#64748b;">' + tokens + ' tokens</div>' : '');
+
+            // Preview snippet (last line of output)
+            var previewSnippet = preview ? escapeHtml(preview.substring(preview.length - 80)) : '';
+            var previewLine = previewSnippet
+                ? '<div style="margin-top:2px;color:#475569;max-width:600px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;">' + previewSnippet + '</div>'
+                : '';
+
+            html += '<div style="padding:4px 0;border-bottom:1px solid #1e293b;margin-bottom:4px;">' +
+                '<div style="display:flex;align-items:center;gap:8px;">' +
+                '  <span style="color:#ffcc00;font-weight:bold;">⚙️ ' + escapeHtml((t.prompt || '').substring(0, 50)) + '</span>' +
+                '  <span style="color:#ffcc00;font-size:9px;"' + elapsedAttr + '>' + elapsed + '</span>' +
+                '  <button onclick="event.stopPropagation();watchTask(\'' + t.task_id + '\')" style="background:none;border:1px solid #00ff88;color:#00ff88;border-radius:3px;padding:2px 8px;cursor:pointer;font-size:9px;margin-left:auto;">Watch Live</button>' +
+                '</div>' +
+                '<div style="margin-top:3px;">' + wsBadge + profBadge + mdlBadge + '</div>' +
+                toolLine +
+                previewLine +
+                '</div>';
         });
         if (queued.length > 0) {
-            html += '<span style="color:#64748b;">⏳ ' + queued.length + ' queued</span>';
+            html += '<div style="color:#64748b;padding-top:4px;">⏳ ' + queued.length + ' queued</div>';
         }
         bar.innerHTML = html;
-        bar.style.display = 'flex';
+        bar.style.display = 'block';
+        _startElapsedTicker();
     }).catch(function() {});
 }
 
