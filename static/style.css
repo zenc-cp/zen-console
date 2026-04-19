@@ -1045,6 +1045,7 @@ body.resizing{user-select:none;cursor:col-resize;}
 /* ── Message timestamps ── */
 .msg-time{font-size:10px;color:var(--muted);opacity:.6;margin-left:6px;}
 .msg-role:hover .msg-time{opacity:1;}
+.msg-bg-badge{font-size:9px;color:#ffcc00;background:rgba(255,204,0,0.1);border:1px solid rgba(255,204,0,0.3);border-radius:3px;padding:1px 5px;margin-left:6px;font-family:monospace;letter-spacing:0.5px;vertical-align:middle;cursor:help;}
 
 /* ── Mermaid diagrams ── */
 .mermaid-block{background:var(--code-bg);border-radius:8px;padding:16px;margin:8px 0;overflow-x:auto;}

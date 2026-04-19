@@ -83,7 +83,7 @@ function initBackgroundMode() {
 
 /* ─── Submit background task ────────────────────────────────────────────── */
 
-async function submitBackgroundTask(sessionId, message, model, workspace) {
+async function submitBackgroundTask(sessionId, message, model, workspace, profile) {
     try {
         var res = await api('/api/task/submit', {
             method: 'POST',
@@ -92,6 +92,7 @@ async function submitBackgroundTask(sessionId, message, model, workspace) {
                 message: message,
                 model: model || '',
                 workspace: workspace || '',
+                profile: profile || '',
             }),
         });
         if (res.ok && res.task) {
@@ -188,6 +189,14 @@ function renderTaskCard(task) {
         ? '<div style="color:#64748b;margin-top:2px;overflow:hidden;text-overflow:ellipsis;">' +
           escapeHtml(preview.substring(0, 80)) + '</div>'
         : '';
+    // Context line: workspace + profile
+    var contextParts = [];
+    if (task.workspace) contextParts.push('📂 ' + escapeHtml(task.workspace.split('/').pop()));
+    if (task.profile) contextParts.push('👤 ' + escapeHtml(task.profile));
+    if (task.model) contextParts.push('🤖 ' + escapeHtml(task.model.split('/').pop()));
+    var contextLine = contextParts.length
+        ? '<div style="color:#475569;margin-top:2px;font-size:5px;">' + contextParts.join(' &middot; ') + '</div>'
+        : '';
 
     return '<div class="task-card" data-task-id="' + task.task_id + '" style="' +
         'background:rgba(30,41,59,0.5);border:1px solid ' + color + '33;border-radius:4px;' +
@@ -202,6 +211,7 @@ function renderTaskCard(task) {
         '  </div>' +
         tokenLine +
         previewLine +
+        contextLine +
         watchBtn +
         cancelBtn +
         retryBtn +
@@ -440,11 +450,12 @@ setInterval(checkNotifications, 30000);
             var sessionId = (typeof S !== 'undefined' && S.session) ? S.session.session_id : '';
             var model = (typeof S !== 'undefined' && S.session) ? (S.session.model || '') : '';
             var workspace = (typeof S !== 'undefined' && S.session) ? (S.session.workspace || '') : '';
+            var profile = (typeof getActiveProfileName === 'function') ? getActiveProfileName() : '';
 
             $('msg').value = '';
             if (typeof autoResize === 'function') autoResize();
 
-            await submitBackgroundTask(sessionId, text, model, workspace);
+            await submitBackgroundTask(sessionId, text, model, workspace, profile);
         };
     }
 
@@ -454,6 +465,69 @@ setInterval(checkNotifications, 30000);
         patchSend();
     }
 })();
+
+/* ── Floating running-task status bar ─────────────────────────────────────── */
+
+function updateRunningTaskBar() {
+    var bar = document.getElementById('runningTaskBar');
+    // Fetch all tasks to find running ones
+    api('/api/tasks?limit=20').then(function(res) {
+        if (!res || !res.tasks) return;
+        var running = res.tasks.filter(function(t) { return t.status === 'running'; });
+        var queued = res.tasks.filter(function(t) { return t.status === 'queued'; });
+
+        if (running.length === 0 && queued.length === 0) {
+            if (bar) bar.style.display = 'none';
+            return;
+        }
+
+        if (!bar) {
+            bar = document.createElement('div');
+            bar.id = 'runningTaskBar';
+            bar.style.cssText = [
+                'position:sticky;top:0;z-index:500;',
+                'background:rgba(12,14,26,0.95);border-bottom:1px solid #1e293b;',
+                'padding:4px 12px;display:flex;align-items:center;gap:12px;',
+                'font-family:monospace;font-size:10px;color:#94a3b8;',
+            ].join('');
+            // Insert above the chat messages area
+            var msgInner = document.getElementById('msgInner');
+            if (msgInner && msgInner.parentElement) {
+                msgInner.parentElement.insertBefore(bar, msgInner);
+            }
+        }
+
+        var html = '';
+        running.forEach(function(t) {
+            var tokens = (t.progress && t.progress.tokens) || 0;
+            var tool = (t.progress && t.progress.current_tool) || '';
+            var preview = (t.progress && t.progress.preview) || '';
+            var statusDetail = tool ? ' 🔧 ' + escapeHtml(tool) : (tokens ? ' ' + tokens + ' tok' : '');
+            var previewSnippet = preview ? escapeHtml(preview.substring(preview.length - 60)) : '';
+            html += '<span style="color:#ffcc00;">⚙️ ' + escapeHtml((t.prompt || '').substring(0, 40)) + statusDetail + '</span>';
+            if (previewSnippet) html += '<span style="color:#475569;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + previewSnippet + '</span>';
+            html += '<button onclick="event.stopPropagation();watchTask(\'' + t.task_id + '\')" style="background:none;border:1px solid #00ff88;color:#00ff88;border-radius:2px;padding:1px 4px;cursor:pointer;font-size:8px;">Watch</button>';
+        });
+        if (queued.length > 0) {
+            html += '<span style="color:#64748b;">⏳ ' + queued.length + ' queued</span>';
+        }
+        bar.innerHTML = html;
+        bar.style.display = 'flex';
+    }).catch(function() {});
+}
+
+// Update the bar on each poll cycle
+var _origPoll = pollTasks;
+pollTasks = async function() {
+    await _origPoll();
+    updateRunningTaskBar();
+};
+// Also update when panel refreshes
+var _origRefresh = refreshTaskList;
+refreshTaskList = async function() {
+    await _origRefresh();
+    updateRunningTaskBar();
+};
 
 /* ─── Task panel toggle button ─────────────────────────────────────────────── */
 
@@ -483,6 +557,8 @@ function initTaskSystem() {
     // Restore any active tasks from previous session
     refreshTaskList();
     checkNotifications();
+    // Show running-task bar if tasks are active
+    updateRunningTaskBar();
 }
 
 if (document.readyState === 'loading') {
