@@ -1046,6 +1046,42 @@ function msgContent(m){
   return String(c).trim();
 }
 
+/** Build a collapsible context card for background task messages.
+ *  Shows task ID, model, workspace, profile, duration, status.
+ *  Click to expand/collapse details.
+ */
+function buildBgContextCard(m) {
+  const tid = (m._bg_task || '').substring(0, 12);
+  const model = m._bg_model || '';
+  const ws = m._bg_workspace || '';
+  const prof = m._bg_profile || '';
+  const dur = m._bg_duration || '';
+  const st = m._bg_status || '';
+  const isOk = st === 'completed';
+  const isFail = st === 'failed';
+
+  // Status icon + color
+  let statusIcon, statusColor;
+  if (isOk) { statusIcon = '✓'; statusColor = '#4ade80'; }
+  else if (isFail) { statusIcon = '✗'; statusColor = '#f87171'; }
+  else if (st) { statusIcon = '●'; statusColor = '#facc15'; }
+  else { statusIcon = '⚡'; statusColor = '#facc15'; }
+
+  // Compact inline badge (always visible)
+  let badge = `<span class="bg-ctx-badge" onclick="this.parentElement.classList.toggle('open')" title="Background task: ${esc(tid)}">⚡ <span class="bg-ctx-id">${esc(tid)}</span>${dur ? ' · ' + esc(dur) : ''}</span>`;
+
+  // Expandable detail row
+  let details = `<span class="bg-ctx-details">`;
+  if (model) details += `<span class="bg-ctx-field"><span class="bg-ctx-label">Model</span>${esc(model)}</span>`;
+  if (ws) details += `<span class="bg-ctx-field"><span class="bg-ctx-label">Workspace</span>${esc(ws)}</span>`;
+  if (prof) details += `<span class="bg-ctx-field"><span class="bg-ctx-label">Profile</span>${esc(prof)}</span>`;
+  if (dur) details += `<span class="bg-ctx-field"><span class="bg-ctx-label">Duration</span>${esc(dur)}</span>`;
+  details += `<span class="bg-ctx-field"><span class="bg-ctx-label">Status</span><span style="color:${statusColor}">${statusIcon} ${esc(st || 'unknown')}</span></span>`;
+  details += `</span>`;
+
+  return `<span class="bg-ctx-wrap">${badge}${details}</span>`;
+}
+
 function renderMessages(){
   const inner=$('msgInner');
   const vis=S.messages.filter(m=>{
@@ -1121,9 +1157,9 @@ function renderMessages(){
     const tsVal=m._ts||m.timestamp;
     const tsTitle=tsVal?new Date(tsVal*1000).toLocaleString():'';
     const _bn=window._botName||'Hermes';
-    // Background task badge — shows when message originated from a bg task
-    const bgBadge=m._bg_task?`<span class="msg-bg-badge" title="Background task: ${esc(m._bg_task.substring(0,8))}…">⚡ bg</span>`:'';
-    row.innerHTML=`<div class="msg-role ${m.role}" ${tsTitle?`title="${esc(tsTitle)}"`:''}><div class="role-icon ${m.role}">${isUser?'Y':esc(_bn.charAt(0).toUpperCase())}</div><span style="font-size:12px">${isUser?t('you'):esc(_bn)}</span>${bgBadge}${tsTitle?`<span class="msg-time">${new Date(tsVal*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>`:''}<span class="msg-actions">${editBtn}<button class="msg-copy-btn msg-action-btn" title="${t('copy')}" onclick="copyMsg(this)">${li('copy',13)}</button>${retryBtn}</span></div>${filesHtml}<div class="msg-body">${bodyHtml}</div>`;
+    // Background task context card — shows rich info when message originated from a bg task
+    const bgCtx = m._bg_task ? buildBgContextCard(m) : '';
+    row.innerHTML=`<div class="msg-role ${m.role}" ${tsTitle?`title="${esc(tsTitle)}"`:''}><div class="role-icon ${m.role}">${isUser?'Y':esc(_bn.charAt(0).toUpperCase())}</div><span style="font-size:12px">${isUser?t('you'):esc(_bn)}</span>${bgCtx}${tsTitle?`<span class="msg-time">${new Date(tsVal*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>`:''}<span class="msg-actions">${editBtn}<button class="msg-copy-btn msg-action-btn" title="${t('copy')}" onclick="copyMsg(this)">${li('copy',13)}</button>${retryBtn}</span></div>${filesHtml}<div class="msg-body">${bodyHtml}</div>`;
     row.dataset.rawText = String(content).trim();
     inner.appendChild(row);
   }

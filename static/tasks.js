@@ -825,6 +825,9 @@ async function injectTaskResultIntoChat(task) {
             content: task.prompt || '',
             _ts: Date.now() / 1000,
             _bg_task: task.task_id,
+            _bg_model: res.model || task.model || '',
+            _bg_workspace: res.workspace || task.workspace || '',
+            _bg_profile: res.profile || task.profile || '',
         });
 
         // Add assistant message (the result)
@@ -833,6 +836,11 @@ async function injectTaskResultIntoChat(task) {
             content: res.result,
             _ts: Date.now() / 1000 + 0.001,
             _bg_task: task.task_id,
+            _bg_model: res.model || task.model || '',
+            _bg_workspace: res.workspace || task.workspace || '',
+            _bg_profile: res.profile || task.profile || '',
+            _bg_duration: res.duration || '',
+            _bg_status: res.status || task.status || '',
         });
 
         // Re-render the chat

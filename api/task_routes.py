@@ -194,11 +194,36 @@ def handle_task_result(handler, parsed) -> True:
         bad(handler, f'Task not found: {task_id}', 404)
         return True
 
+    # Calculate duration
+    _dur = ''
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        sa = task.get('started_at', '')
+        ca = task.get('completed_at', '')
+        if sa and ca:
+            s = _dt.fromisoformat(sa)
+            c = _dt.fromisoformat(ca)
+            secs = int((c - s).total_seconds())
+            if secs >= 60:
+                _dur = f'{secs // 60}m {secs % 60}s'
+            else:
+                _dur = f'{secs}s'
+    except Exception:
+        pass
+
     payload = {
         'task_id': task['task_id'],
         'status': task['status'],
         'result': task.get('result', ''),
         'error': task.get('error', ''),
+        'model': task.get('model', ''),
+        'workspace': task.get('workspace', ''),
+        'profile': task.get('profile', ''),
+        'duration': _dur,
+        'prompt': task.get('prompt', ''),
+        'created_at': task.get('created_at', ''),
+        'started_at': task.get('started_at', ''),
+        'completed_at': task.get('completed_at', ''),
     }
 
     if task['status'] != 'completed':

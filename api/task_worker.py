@@ -59,9 +59,8 @@ class BackgroundWorker:
     def _loop(self) -> None:
         while self._running:
             try:
-                # Clean up stale running tasks on each pass
-                self._store.cleanup_stale_running(timeout_minutes=30)
-
+                # NOTE: cleanup_stale_running is handled by task_sweeper (30min timeout).
+                # Don't duplicate here — the sweeper runs every 60s and is the authority.
                 task = self._store.get_next_queued()
                 if task is None:
                     time.sleep(self._poll_interval)
@@ -261,13 +260,37 @@ class BackgroundWorker:
                 'content': task.get('prompt', ''),
                 '_ts': ts,
                 '_bg_task': task.get('task_id', ''),
+                '_bg_model': task.get('model', ''),
+                '_bg_workspace': task.get('workspace', ''),
+                '_bg_profile': task.get('profile', ''),
             })
             # Add assistant message (the result)
+            # Calculate duration from started_at -> completed_at
+            _dur = ''
+            try:
+                from datetime import datetime as _dt, timezone as _tz
+                sa = task.get('started_at', '')
+                ca = task.get('completed_at', '')
+                if sa and ca:
+                    s = _dt.fromisoformat(sa)
+                    c = _dt.fromisoformat(ca)
+                    secs = int((c - s).total_seconds())
+                    if secs >= 60:
+                        _dur = f'{secs // 60}m {secs % 60}s'
+                    else:
+                        _dur = f'{secs}s'
+            except Exception:
+                pass
             session.messages.append({
                 'role': 'assistant',
                 'content': result,
                 '_ts': ts + 0.001,
                 '_bg_task': task.get('task_id', ''),
+                '_bg_model': task.get('model', ''),
+                '_bg_workspace': task.get('workspace', ''),
+                '_bg_profile': task.get('profile', ''),
+                '_bg_duration': _dur,
+                '_bg_status': task.get('status', ''),
             })
             session.save()
         except Exception as exc:

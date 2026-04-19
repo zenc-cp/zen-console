@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 _SWEEP_INTERVAL = 60
 
 # Thresholds
-_RUNNING_TIMEOUT_SECS = 120   # 2 minutes — a running task should finish or heartbeat
-_QUEUED_TIMEOUT_SECS  = 300   # 5 minutes — a queued task should have been picked up
+_RUNNING_TIMEOUT_SECS = 1800  # 30 minutes — complex agent tasks (research, coding) routinely take 5-60 min
+_QUEUED_TIMEOUT_SECS  = 600   # 10 minutes — allow time for server restart + worker spin-up
 
 
 def _utcnow() -> datetime:
@@ -66,6 +66,16 @@ def _sweep_once(task_store, streams_dict: dict, streams_lock: threading.Lock) ->
         if started_dt is None:
             # Can't determine age — skip
             continue
+
+        # Heartbeat liveness: if updated_at is recent, the worker is still active
+        # even if the task has been running a long time. Only kill truly stuck tasks.
+        updated_at = task.get('updated_at', '')
+        updated_dt = _parse_dt(updated_at)
+        if updated_dt is not None:
+            idle_secs = int((now - updated_dt).total_seconds())
+            if idle_secs < _RUNNING_TIMEOUT_SECS:
+                # Still heartbeating — skip
+                continue
 
         if started_dt < running_cutoff:
             age_secs = int((now - started_dt).total_seconds())

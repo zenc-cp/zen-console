@@ -1047,6 +1047,17 @@ body.resizing{user-select:none;cursor:col-resize;}
 .msg-role:hover .msg-time{opacity:1;}
 .msg-bg-badge{font-size:9px;color:#ffcc00;background:rgba(255,204,0,0.1);border:1px solid rgba(255,204,0,0.3);border-radius:3px;padding:1px 5px;margin-left:6px;font-family:monospace;letter-spacing:0.5px;vertical-align:middle;cursor:help;}
 
+/* ── Background task context card ── */
+.bg-ctx-wrap{display:inline-flex;align-items:center;gap:0;margin-left:6px;vertical-align:middle;font-family:var(--mono,'JetBrains Mono',monospace);}
+.bg-ctx-badge{font-size:9px;color:#ffcc00;background:rgba(255,204,0,0.08);border:1px solid rgba(255,204,0,0.25);border-radius:3px;padding:1px 6px;cursor:pointer;transition:all .15s;user-select:none;}
+.bg-ctx-badge:hover{background:rgba(255,204,0,0.16);border-color:rgba(255,204,0,0.45);}
+.bg-ctx-id{font-weight:600;letter-spacing:0.5px;}
+.bg-ctx-details{display:none;font-size:9px;gap:6px;margin-left:4px;color:var(--muted,#64748b);background:rgba(255,255,255,0.03);border:1px solid var(--border2,#1e293b);border-radius:4px;padding:2px 8px;}
+.bg-ctx-wrap.open .bg-ctx-details{display:inline-flex;}
+.bg-ctx-wrap.open .bg-ctx-badge{background:rgba(255,204,0,0.16);border-color:rgba(255,204,0,0.45);}
+.bg-ctx-field{display:inline-flex;gap:3px;align-items:center;}
+.bg-ctx-label{font-weight:700;text-transform:uppercase;letter-spacing:0.04em;opacity:.5;font-size:8px;}
+
 /* ── Mermaid diagrams ── */
 .mermaid-block{background:var(--code-bg);border-radius:8px;padding:16px;margin:8px 0;overflow-x:auto;}
 .mermaid-rendered{background:transparent;padding:8px 0;}
