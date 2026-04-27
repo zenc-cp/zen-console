@@ -224,9 +224,18 @@ function renderTaskCard(task) {
     var durationLine = (task.status !== 'running' && duration)
         ? '<div style="color:#475569;margin-top:2px;font-size:6px;">⏱ ' + duration + '</div>'
         : '';
-    var previewLine = task.status === 'completed'
-        ? '<div style="color:#64748b;margin-top:2px;overflow:hidden;text-overflow:ellipsis;">' +
-          escapeHtml(preview.substring(0, 100)) + '</div>'
+    // For completed tasks: expandable inline log — auto-show on first completion
+    var logLine = task.status === 'completed'
+        ? '<div style="margin-top:4px;" class="task-log-wrap" id="tlw_' + escapeHtml(task.task_id) + '">' +
+          '<button onclick="event.stopPropagation();toggleTaskLog(\'' + escapeHtml(task.task_id) + '\')" ' +
+          'style="background:none;border:1px solid #334155;color:#64748b;border-radius:2px;' +
+          'padding:2px 6px;cursor:pointer;font-size:6px;">📋 Show log</button>' +
+          '<div id="tlog_' + escapeHtml(task.task_id) + '" style="display:none;margin-top:6px;' +
+          'background:rgba(0,0,0,0.3);border:1px solid #1e293b;border-radius:4px;' +
+          'padding:6px 8px;max-height:200px;overflow-y:auto;' +
+          'font-family:monospace;font-size:10px;color:#94a3b8;white-space:pre-wrap;text-align:left;word-break:break-all;">' +
+          escapeHtml((task.result || preview || '').substring(0, 500)) +
+          '</div></div>'
         : '';
     // Context badges: workspace + profile + model
     var badges = [];
@@ -250,7 +259,7 @@ function renderTaskCard(task) {
         '  </div>' +
         tokenLine +
         durationLine +
-        previewLine +
+        logLine +
         badgeLine +
         '  <div style="margin-top:4px;">' + watchBtn + cancelBtn + retryBtn + '</div>' +
         '</div>';
@@ -393,33 +402,71 @@ async function retryTask(taskId) {
     }
 }
 
+/* ─── Expandable task log ─────────────────────────────────────────────────── */
+
+async function toggleTaskLog(taskId) {
+    var logDiv = document.getElementById('tlog_' + taskId);
+    var wrapDiv = document.getElementById('tlw_' + taskId);
+    if (!logDiv) return;
+
+    var btn = wrapDiv ? wrapDiv.querySelector('button') : null;
+    if (logDiv.style.display === 'none') {
+        // Lazy-load full result if we only have a cached preview
+        var logText = logDiv.textContent || '';
+        if (logText.length < 200) {
+            try {
+                var res = await api('/api/task/result?task_id=' + encodeURIComponent(taskId));
+                if (res && res.result) {
+                    logText = res.result;
+                    logDiv.textContent = logText;
+                }
+            } catch (e) { /* keep cached text */ }
+        }
+        logDiv.style.display = 'block';
+        if (btn) btn.textContent = '📋 Hide log';
+        logDiv.scrollTop = 0;
+    } else {
+        logDiv.style.display = 'none';
+        if (btn) btn.textContent = '📋 Show log';
+    }
+}
+
+/* ─── View full result modal ─────────────────────────────────────────────── */
+
 async function viewTaskResult(taskId) {
     try {
         var res = await api('/api/task/result?task_id=' + encodeURIComponent(taskId));
         if (res.result) {
             var modal = document.createElement('div');
             modal.style.cssText = [
-                'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;',
+                'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:1000;',
                 'display:flex;align-items:center;justify-content:center;',
             ].join('');
             modal.innerHTML =
                 '<div style="background:#0c0e1a;border:1px solid #1e293b;border-radius:8px;' +
-                'padding:16px;max-width:600px;width:90%;max-height:80vh;overflow-y:auto;' +
-                'font-family:monospace;color:#e2e8f0;font-size:12px;white-space:pre-wrap;position:relative;">' +
-                '  <button onclick="this.closest(\'[data-modal]\').remove()" ' +
-                '    style="position:absolute;top:8px;right:8px;background:none;border:none;' +
-                '    color:#64748b;cursor:pointer;font-size:16px;">✕</button>' +
-                '  <div style="color:#00ff88;margin-bottom:8px;font-size:10px;">Task Result: ' +
-                escapeHtml(taskId) + '</div>' +
-                escapeHtml(res.result) +
+                'padding:20px;width:94%;max-width:860px;max-height:88vh;overflow-y:auto;' +
+                'font-family:monospace;color:#e2e8f0;font-size:12px;white-space:pre-wrap;' +
+                'position:relative;display:flex;flex-direction:column;gap:10px;">' +
+                '  <div style="display:flex;justify-content:space-between;align-items:center;' +
+                '    border-bottom:1px solid #1e293b;padding-bottom:8px;margin-bottom:4px;">' +
+                '    <span style="color:#00ff88;font-size:10px;">Task Result: ' +
+                escapeHtml(taskId) + '</span>' +
+                '    <div style="display:flex;gap:8px;align-items:center;">' +
+                '      <span style="color:#475569;font-size:9px;">' +
+                escapeHtml((res.result || '').length + ' chars') + '</span>' +
+                '      <button onclick="copyTaskResult(\'' + escapeHtml(taskId) + '\')" ' +
+                '        title="Copy to clipboard" ' +
+                '        style="background:none;border:1px solid #334155;color:#64748b;' +
+                '        border-radius:3px;padding:3px 8px;cursor:pointer;font-size:9px;">📋 Copy</button>' +
+                '      <button onclick="this.closest(\'[data-modal]\').remove()" ' +
+                '        style="background:none;border:none;color:#64748b;' +
+                '        cursor:pointer;font-size:16px;padding:0 4px;">✕</button>' +
+                '    </div>' +
+                '  </div>' +
+                '  <div id="taskResultContent" style="flex:1;overflow-y:auto;color:#c4cfe0;' +
+                '  line-height:1.6;">' + escapeHtml(res.result) + '</div>' +
                 '</div>';
-            // Tag for easy querySelector removal
             modal.setAttribute('data-modal', 'task-result');
-            // Fix close button selector now that we use data-modal
-            var closeBtn = modal.querySelector('button');
-            if (closeBtn) {
-                closeBtn.onclick = function () { modal.remove(); };
-            }
             modal.addEventListener('click', function (e) {
                 if (e.target === modal) modal.remove();
             });
@@ -431,6 +478,18 @@ async function viewTaskResult(taskId) {
         }
     } catch (e) {
         showTaskToast('Failed to load result', 'error');
+    }
+}
+
+/* Copy result text from modal for reuse */
+function copyTaskResult(taskId) {
+    var content = document.getElementById('taskResultContent');
+    if (content && navigator.clipboard) {
+        navigator.clipboard.writeText(content.textContent || '').then(function() {
+            showTaskToast('Copied!', 'success');
+        }).catch(function() {
+            showTaskToast('Copy failed', 'error');
+        });
     }
 }
 
@@ -683,6 +742,8 @@ window.toggleTaskPanel = toggleTaskPanel;
 window.cancelTask = cancelTask;
 window.retryTask = retryTask;
 window.viewTaskResult = viewTaskResult;
+window.toggleTaskLog = toggleTaskLog;
+window.copyTaskResult = copyTaskResult;
 
 // ── Live task stream viewer ──────────────────────────────────────────────────
 
