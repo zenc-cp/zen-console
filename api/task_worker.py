@@ -133,6 +133,30 @@ class BackgroundWorker:
         """Internal: run agent pipeline for a task and capture all events."""
         from api.streaming import _run_agent_streaming, STREAMS, STREAMS_LOCK
 
+        # Ensure the session exists — background tasks may use a fresh session_id
+        from api.models import get_session, new_session
+        session_id = task['session_id']
+        try:
+            get_session(session_id)
+        except KeyError:
+            # Create the session so _run_agent_streaming can find it
+            s = new_session(workspace=task.get('workspace') or '', model=task.get('model') or '')
+            # Re-key the session to match the task's session_id
+            from api.config import LOCK, SESSIONS
+            with LOCK:
+                if session_id not in SESSIONS:
+                    # Move the new session under the task's session_id
+                    old_sid = s.session_id
+                    s.session_id = session_id
+                    SESSIONS[session_id] = s
+                    SESSIONS.pop(old_sid, None)
+                    s.save()
+            import logging as _log
+            _log.getLogger(__name__).info(
+                'Task %s: created session %s for background task',
+                task_id[:8], session_id,
+            )
+
         # Create a capture queue (same as SSE stream, but we read from it ourselves)
         q = queue.Queue()
         with STREAMS_LOCK:

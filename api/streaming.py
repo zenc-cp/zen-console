@@ -651,6 +651,72 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 # ============================================================
 
 
+# ═══════════════════════════════════════════════
+# Hallucination Guard Stubs
+# (tests/test_hallucination_guard.py imports these)
+# ═══════════════════════════════════════════════
+
+def _contains_fake_tool_output(text):
+    """Detect fabricated tool output patterns in model responses.
+
+    Detects JSON-looking shell output (e.g. '{"output": "...", "exit_code": N}')
+    that appears in model text without an actual tool call.
+    """
+    if not text:
+        return False
+    import re
+    # Match any JSON object containing output/result + exit_code fields
+    # (the key fingerprint of a fabricated tool result)
+    patterns = [
+        re.compile(r'\{[^{}]*"output"[^{}]*"exit_code"[^{}]*\}', re.DOTALL),
+        re.compile(r'\{[^{}]*"result"[^{}]*"exit_code"[^{}]*\}', re.DOTALL),
+        re.compile(r'\{[^{}]*"stderr"[^{}]*"output"[^{}]*"exit_code"[^{}]*\}', re.DOTALL),
+        re.compile(r'```(?:json)?\s*\{[^}]*"output"[^}]*\}[^}]*```', re.DOTALL),
+    ]
+    for p in patterns:
+        if p.search(text):
+            return True
+    return False
+
+
+def _strip_fake_tool_output(text):
+    """Remove fabricated tool output from model response text.
+
+    Replaces each detected fake JSON block with the literal marker
+    'Fabricated output removed' so the position in text is preserved.
+    """
+    if not text:
+        return text
+    import re
+    marker = 'Fabricated output removed'
+    # Remove code-fenced fake JSON blocks
+    text = re.sub(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', lambda m: marker, text)
+    # Remove inline fake JSON tool blocks (any JSON with output + exit_code)
+    text = re.sub(
+        r'\{[^{}]*"output"[^{}]*"exit_code"[^{}]*\}',
+        marker, text,
+    )
+    text = re.sub(
+        r'\{[^{}]*"result"[^{}]*"exit_code"[^{}]*\}',
+        marker, text,
+    )
+    text = re.sub(
+        r'\{[^{}]*"stderr"[^{}]*"output"[^{}]*"exit_code"[^{}]*\}',
+        marker, text,
+    )
+    return text
+
+
+_ANTI_HALLUCINATION_PROMPT = (
+    "IMPORTANT: You have access to the terminal tool. When you call the terminal tool, "
+    "you MUST wait for the actual output before reporting results. "
+    "NEVER fabricate tool results — only report what the tool actually returned. "
+    'NEVER include raw shell JSON output (like {"output": "total 396\\ndrwxr-xr-x"...}) '
+    "unless it was actually returned by a tool call. "
+    'Format tool responses as {\"output\": \"...\", \"exit_code\": N}.'
+)
+
+
 def cancel_stream(stream_id: str) -> bool:
     """Signal an in-flight stream to cancel. Returns True if the stream existed."""
     with STREAMS_LOCK:

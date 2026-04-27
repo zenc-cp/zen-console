@@ -202,14 +202,57 @@ async function submitBgTask() {
   errEl.style.display = 'none';
   if (!prompt) { errEl.textContent = 'Prompt is required'; errEl.style.display = ''; return; }
   try {
-    await api('/api/task/submit', {
+    const res = await api('/api/task/submit', {
       method: 'POST',
       body: JSON.stringify({ session_id: sessionId, message: prompt, model })
     });
     $('bgTaskPrompt').value = '';
     showToast('Task submitted — runs even without browser open');
     await loadBgTasks();
+    // Start auto-polling for this task so result appears automatically
+    if (res && res.task && res.task.task_id) {
+      _pollSingleBgTask(res.task.task_id);
+    }
   } catch(e) { errEl.textContent = t('error_prefix') + e.message; errEl.style.display = ''; }
+}
+
+/* Auto-poll a single background task until completion, then show result modal. */
+let _bgTaskPollTimer = null;
+
+function _pollSingleBgTask(taskId) {
+  if (_bgTaskPollTimer) {
+    clearInterval(_bgTaskPollTimer);
+    _bgTaskPollTimer = null;
+  }
+  var attempts = 0;
+  _bgTaskPollTimer = setInterval(async function() {
+    attempts++;
+    if (attempts > 120) {  // 120 * 2s = 4 min timeout
+      clearInterval(_bgTaskPollTimer);
+      _bgTaskPollTimer = null;
+      return;
+    }
+    try {
+      var data = await api('/api/task/result?task_id=' + encodeURIComponent(taskId));
+      if (!data) return;
+      if (data.status === 'completed') {
+        clearInterval(_bgTaskPollTimer);
+        _bgTaskPollTimer = null;
+        showToast('Task result ready — opening...');
+        viewBgTaskResult(taskId);
+        loadBgTasks();
+      } else if (data.status === 'failed') {
+        clearInterval(_bgTaskPollTimer);
+        _bgTaskPollTimer = null;
+        showToast('Task failed: ' + (data.error || 'unknown error'));
+        loadBgTasks();
+      } else if (data.status === 'cancelled') {
+        clearInterval(_bgTaskPollTimer);
+        _bgTaskPollTimer = null;
+        loadBgTasks();
+      }
+    } catch (_) {}
+  }, 2000);
 }
 
 function watchBgTask(taskId) {
