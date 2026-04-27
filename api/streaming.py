@@ -117,7 +117,14 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             logger.debug("Failed to put event to queue")
 
     try:
-        s = get_session(session_id)
+        s = None
+        try:
+            s = get_session(session_id)
+        except KeyError:
+            print(f'[webui] stream error: session not found session_id={session_id!r}', flush=True)
+            q.put_nowait(('error', json.dumps({'error': 'Session not found'})))
+            q.put_nowait(('done', '{}'))
+            return
         s.workspace = str(Path(workspace).expanduser().resolve())
         s.model = model
 

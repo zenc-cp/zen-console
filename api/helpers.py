@@ -63,7 +63,10 @@ def j(handler, payload, status: int=200) -> None:
     handler.send_header('Cache-Control', 'no-store')
     _security_headers(handler)
     handler.end_headers()
-    handler.wfile.write(body)
+    try:
+        handler.wfile.write(body)
+    except BrokenPipeError:
+        pass  # Client disconnected — not worth crashing for
 
 
 def t(handler, payload, status: int=200, content_type: str='text/plain; charset=utf-8') -> None:

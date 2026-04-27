@@ -72,9 +72,13 @@ def handle_upload(handler):
         filename, file_bytes = files['file']
         if not filename:
             return j(handler, {'error': 'No filename in upload'}, status=400)
+        if not session_id:
+            print(f'[webui] upload debug: no session_id in fields. fields={list(fields.keys())} files={list(files.keys())} content_type={content_type[:100]}', flush=True)
+            return j(handler, {'error': 'No session_id in upload'}, status=400)
         try:
             s = get_session(session_id)
         except KeyError:
+            print(f'[webui] upload debug: session not found. session_id={session_id!r}', flush=True)
             return j(handler, {'error': 'Session not found'}, status=404)
         workspace = Path(s.workspace)
         safe_name = _sanitize_upload_name(filename)

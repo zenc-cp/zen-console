@@ -60,6 +60,15 @@ class Handler(BaseHTTPRequestHandler):
         })
         print(f'[webui] {record}', flush=True)
 
+    def do_OPTIONS(self) -> None:
+        """Handle CORS preflight requests. Browsers send OPTIONS before cross-origin POSTs."""
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Forwarded-Host, X-Real-Host')
+        self.send_header('Access-Control-Max-Age', '86400')
+        self.end_headers()
+
     def do_GET(self) -> None:
         self._req_t0 = time.time()
         try:
