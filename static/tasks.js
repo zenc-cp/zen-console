@@ -225,16 +225,19 @@ function renderTaskCard(task) {
         ? '<div style="color:#475569;margin-top:2px;font-size:6px;">⏱ ' + duration + '</div>'
         : '';
     // For completed tasks: expandable inline log — auto-show on first completion
-    var logLine = task.status === 'completed'
-        ? '<div style="margin-top:4px;" class="task-log-wrap" id="tlw_' + escapeHtml(task.task_id) + '">' +
+    // Use innerHTML with formatResultText so code blocks / headings render
+    var logId = 'tlog_' + escapeHtml(task.task_id);
+    var wrapId = 'tlw_' + escapeHtml(task.task_id);
+    var logSnippet = task.status === 'completed'
+        ? '<div style="margin-top:4px;" class="task-log-wrap" id="' + wrapId + '">' +
           '<button onclick="event.stopPropagation();toggleTaskLog(\'' + escapeHtml(task.task_id) + '\')" ' +
           'style="background:none;border:1px solid #334155;color:#64748b;border-radius:2px;' +
           'padding:2px 6px;cursor:pointer;font-size:6px;">📋 Show log</button>' +
-          '<div id="tlog_' + escapeHtml(task.task_id) + '" style="display:none;margin-top:6px;' +
+          '<div id="' + logId + '" style="display:none;margin-top:6px;' +
           'background:rgba(0,0,0,0.3);border:1px solid #1e293b;border-radius:4px;' +
           'padding:6px 8px;max-height:200px;overflow-y:auto;' +
           'font-family:monospace;font-size:10px;color:#94a3b8;white-space:pre-wrap;text-align:left;word-break:break-all;">' +
-          escapeHtml((task.result || preview || '').substring(0, 500)) +
+          formatResultText((task.result || preview || '').substring(0, 2000)) +
           '</div></div>'
         : '';
     // Context badges: workspace + profile + model
@@ -259,7 +262,7 @@ function renderTaskCard(task) {
         '  </div>' +
         tokenLine +
         durationLine +
-        logLine +
+        logSnippet +
         badgeLine +
         '  <div style="margin-top:4px;">' + watchBtn + cancelBtn + retryBtn + '</div>' +
         '</div>';
@@ -322,11 +325,158 @@ async function pollTasks() {
                         updateNotificationBadge();
                         // Inject result into main chat stream if this is the active session
                         injectTaskResultIntoChat(res.task);
+                    } else if (res.task.status === 'failed') {
+                        showTaskToast(
+                            'Task failed: ' + (res.task.prompt || '').substring(0, 40) + '…',
+                            'error'
+                        );
                     }
+                    // Auto-show log for completed or failed tasks
+                    setTimeout(function() { autoShowTaskLog(taskId); }, 100);
+                    // Show floating result banner at bottom of screen
+                    showResultBanner(taskId);
                 }
             }
         } catch (e) { /* silent */ }
     }
+}
+
+/* ─── Result formatter ─────────────────────────────────────────────────── */
+
+/** Convert plain text / light markdown into HTML for the log display.
+ *  Handles: code blocks (```...```), inline `code`, **bold**, headings (##),
+ *  and preserves line breaks. Does NOT require external libs. */
+function formatResultText(text) {
+    if (!text) return '';
+    // Escape HTML entities first
+    var escaped = escapeHtml(text);
+    // Code blocks: triple-backtick delimited blocks
+    escaped = escaped.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
+        var langLabel = lang ? '<span style="color:#00ff88;">' + escapeHtml(lang) + '</span> ' : '';
+        return '<div style="background:rgba(0,0,0,0.4);border:1px solid #1e293b;border-radius:4px;padding:8px;margin:4px 0;overflow-x:auto;">' +
+               '<div style="color:#64748b;font-size:8px;margin-bottom:4px;font-family:monospace;">' + langLabel + 'code</div>' +
+               '<pre style="margin:0;color:#c4cfe0;font-size:11px;white-space:pre-wrap;word-break:break-all;font-family:monospace;">' + code + '</pre></div>';
+    });
+    // Inline code: `code`
+    escaped = escaped.replace(/`([^`]+)`/g, '<code style="background:rgba(100,116,139,0.2);border:1px solid rgba(100,116,139,0.3);border-radius:3px;padding:1px 4px;font-size:11px;color:#94a3b8;font-family:monospace;">$1</code>');
+    // Headings: ## Text  →  <strong>Text</strong> with accent
+    escaped = escaped.replace(/^## (.+)$/gm, '<div style="color:#00ff88;font-size:11px;font-family:monospace;margin:8px 0 2px;border-left:2px solid #00ff88;padding-left:6px;">$1</div>');
+    escaped = escaped.replace(/^### (.+)$/gm, '<div style="color:#00ff88;font-size:10px;font-family:monospace;margin:6px 0 2px;border-left:2px solid #334155;padding-left:6px;">$1</div>');
+    // Bold: **text**
+    escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong style="color:#e2e8f0;">$1</strong>');
+    // Line breaks → <br>
+    escaped = escaped.replace(/\n/g, '<br>');
+    return escaped;
+}
+
+/* ─── Auto-show log on task completion ─────────────────────────────────── */
+
+async function autoShowTaskLog(taskId) {
+    var logDiv = document.getElementById('tlog_' + taskId);
+    var wrapDiv = document.getElementById('tlw_' + taskId);
+    if (!logDiv) return;
+
+    // Lazy-load full result from server
+    var duration = '';
+    var charCount = 0;
+    try {
+        var res = await api('/api/task/result?task_id=' + encodeURIComponent(taskId));
+        if (res) {
+            duration = res.duration || '';
+            charCount = (res.result || '').length;
+            if (res.result) {
+                logDiv.innerHTML = formatResultText(res.result);
+            } else if (res.error) {
+                logDiv.innerHTML = '<div style="color:#ff4488;font-family:monospace;font-size:11px;">[Error] ' + escapeHtml(res.error) + '</div>';
+            }
+        }
+    } catch (e) { /* keep cached text */ }
+
+    // Show the log
+    logDiv.style.display = 'block';
+
+    // Add metadata header above the log if not already present
+    if (wrapDiv) {
+        var existingMeta = wrapDiv.querySelector('.task-log-meta');
+        if (!existingMeta && (duration || charCount > 0)) {
+            var metaDiv = document.createElement('div');
+            metaDiv.className = 'task-log-meta';
+            metaDiv.style.cssText = 'display:flex;gap:8px;margin-bottom:4px;flex-wrap:wrap;';
+            var parts = [];
+            if (duration) parts.push('<span style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.25);border-radius:2px;padding:1px 5px;font-size:6px;color:#00ff88;font-family:monospace;">⏱ ' + escapeHtml(duration) + '</span>');
+            if (charCount > 0) parts.push('<span style="background:rgba(100,116,139,0.15);border:1px solid rgba(100,116,139,0.25);border-radius:2px;padding:1px 5px;font-size:6px;color:#94a3b8;font-family:monospace;">' + charCount.toLocaleString() + ' chars</span>');
+            metaDiv.innerHTML = parts.join('');
+            wrapDiv.insertBefore(metaDiv, wrapDiv.firstChild);
+        }
+        var btn = wrapDiv.querySelector('button');
+        if (btn) btn.textContent = '📋 Hide log';
+    }
+    logDiv.scrollTop = 0;
+}
+
+/* ─── Floating result banner ─────────────────────────────────────────────── */
+
+/** Show a dismissible floating banner with the completed task result.
+ *  Appears at the bottom of the screen when a bg task finishes. */
+async function showResultBanner(taskId) {
+    try {
+        var res = await api('/api/task/result?task_id=' + encodeURIComponent(taskId));
+        if (!res || (!res.result && !res.error)) return;
+
+        var existing = document.getElementById('resultBanner_' + taskId);
+        if (existing) existing.remove();
+
+        var isError = !!res.error;
+        var bannerColor = isError ? '#ff4488' : '#00ff88';
+        var label = isError ? 'Task failed' : 'Task complete';
+        var resultText = res.result || ('[Error] ' + res.error);
+        var duration = res.duration || '';
+        var charCount = (res.result || '').length;
+
+        // Preview: first 300 chars, stripped of markdown for banner
+        var preview = resultText.substring(0, 300).replace(/```[\s\S]*?```/g, '[code]').replace(/`[^`]+`/g, '[code]').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\n+/g, ' ').trim();
+        if (resultText.length > 300) preview += '…';
+
+        var banner = document.createElement('div');
+        banner.id = 'resultBanner_' + taskId;
+        banner.style.cssText = [
+            'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);',
+            'width:min(680px, 94vw);',
+            'background:rgba(12,14,26,0.97);',
+            'border:1px solid ' + bannerColor + ';',
+            'border-radius:8px;padding:12px 16px;',
+            'z-index:1200;',
+            'display:flex;flex-direction:column;gap:6px;',
+            'box-shadow: 0 4px 32px rgba(0,0,0,0.6);',
+        ].join('');
+
+        banner.innerHTML =
+            '<div style="display:flex;align-items:center;gap:8px;">' +
+            '  <span style="color:' + bannerColor + ';font-family:monospace;font-size:10px;">' + label + '</span>' +
+            (duration ? '<span style="color:#475569;font-family:monospace;font-size:9px;">· ' + escapeHtml(duration) + '</span>' : '') +
+            (charCount > 0 ? '<span style="color:#475569;font-family:monospace;font-size:9px;">· ' + charCount.toLocaleString() + ' chars</span>' : '') +
+            '  <div style="margin-left:auto;display:flex;gap:6px;">' +
+            '    <button onclick="viewTaskResult(\'' + taskId + '\')" style="background:none;border:1px solid #334155;color:#94a3b8;border-radius:3px;padding:3px 8px;cursor:pointer;font-size:9px;font-family:monospace;">View full</button>' +
+            '    <button onclick="copyTaskResult(\'' + taskId + '\')" title="Copy to clipboard" style="background:none;border:1px solid #334155;color:#64748b;border-radius:3px;padding:3px 8px;cursor:pointer;font-size:9px;font-family:monospace;">Copy</button>' +
+            '    <button onclick="this.closest(\'[id^=resultBanner_]\').remove()" style="background:none;border:none;color:#475569;cursor:pointer;font-size:14px;padding:0 2px;">✕</button>' +
+            '  </div>' +
+            '</div>' +
+            '<div style="font-family:monospace;font-size:11px;color:#94a3b8;white-space:pre-wrap;max-height:120px;overflow:hidden;text-overflow:ellipsis;line-height:1.5;">' +
+            escapeHtml(preview) +
+            '</div>';
+
+        document.body.appendChild(banner);
+
+        // Auto-dismiss after 30s
+        setTimeout(function() {
+            var b = document.getElementById('resultBanner_' + taskId);
+            if (b) {
+                b.style.opacity = '0';
+                b.style.transition = 'opacity 0.5s';
+                setTimeout(function() { b.remove(); }, 500);
+            }
+        }, 30000);
+    } catch (e) { /* silent */ }
 }
 
 var _refreshDebounce = null;
@@ -418,7 +568,7 @@ async function toggleTaskLog(taskId) {
                 var res = await api('/api/task/result?task_id=' + encodeURIComponent(taskId));
                 if (res && res.result) {
                     logText = res.result;
-                    logDiv.textContent = logText;
+                    logDiv.innerHTML = formatResultText(logText);
                 }
             } catch (e) { /* keep cached text */ }
         }
@@ -464,7 +614,7 @@ async function viewTaskResult(taskId) {
                 '    </div>' +
                 '  </div>' +
                 '  <div id="taskResultContent" style="flex:1;overflow-y:auto;color:#c4cfe0;' +
-                '  line-height:1.6;">' + escapeHtml(res.result) + '</div>' +
+                '  line-height:1.6;">' + formatResultText(res.result) + '</div>' +
                 '</div>';
             modal.setAttribute('data-modal', 'task-result');
             modal.addEventListener('click', function (e) {
