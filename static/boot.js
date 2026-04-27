@@ -226,7 +226,7 @@ $('btnAttach').onclick=()=>$('fileInput').click();
     form.append('file',new File([blob],`voice-input.${ext}`,{type:blob.type||`audio/${ext}`}));
     setComposerStatus('Transcribing…');
     try{
-      const res=await fetch('/api/transcribe',{method:'POST',body:form});
+      const res=await fetch(_apiPrefix+'/api/transcribe',{method:'POST',body:form});
       const data=await res.json().catch(()=>({}));
       if(!res.ok) throw new Error(data.error||'Transcription failed');
       _commitTranscript(data.transcript||'');
