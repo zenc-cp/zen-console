@@ -238,8 +238,8 @@ function _pollSingleBgTask(taskId) {
       if (data.status === 'completed') {
         clearInterval(_bgTaskPollTimer);
         _bgTaskPollTimer = null;
-        showToast('Task result ready — opening...');
-        viewBgTaskResult(taskId);
+        showToast('Task completed — showing result + log');
+        viewBgTaskResult(taskId, true);
         loadBgTasks();
       } else if (data.status === 'failed') {
         clearInterval(_bgTaskPollTimer);
@@ -259,59 +259,107 @@ function watchBgTask(taskId) {
   watchTask(taskId);
 }
 
-async function viewBgTaskResult(taskId) {
+async function viewBgTaskResult(taskId, showLogTab) {
   try {
     const data = await api('/api/task/result?task_id=' + encodeURIComponent(taskId));
-    if (!data.result && !data.error && !data.tool_log) return;
+    if (!data.result && !data.error && !(data.tool_log && data.tool_log.length)) return;
     const content = data.result || `[Error]\n${data.error}`;
-
-    // Build tool log section
-    let logHtml = '';
     const toolLog = data.tool_log || [];
-    if (toolLog.length > 0) {
-      logHtml = `<div style="border-top:1px solid var(--border)">`;
-      logHtml += `<div style="padding:8px 16px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">`;
-      logHtml += `<span style="font-size:11px;font-weight:600;color:var(--muted)">Tool Log (${toolLog.length})</span>`;
-      logHtml += `<span style="font-size:10px;color:var(--muted)">▾</span></div>`;
-      logHtml += `<div style="max-height:200px;overflow:auto;padding:0 16px 8px">`;
+
+    // Duration + model badge
+    let metaHtml = '';
+    if (data.duration || data.model || data.profile) {
+      metaHtml = `<div style="padding:6px 16px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border)">`;
+      if (data.duration) metaHtml += `<span style="font-size:10px;color:var(--muted)">⏱ ${esc(data.duration)}</span>`;
+      if (data.model) metaHtml += `<span style="font-size:10px;color:var(--muted)">🤖 ${esc(data.model.split('/').pop())}</span>`;
+      if (data.profile) metaHtml += `<span style="font-size:10px;color:var(--muted)">👤 ${esc(data.profile)}</span>`;
+      if (toolLog.length) metaHtml += `<span style="font-size:10px;color:var(--muted)">🔧 ${toolLog.length} tool calls</span>`;
+      metaHtml += `</div>`;
+    }
+
+    // Tab bar
+    const hasLog = toolLog.length > 0;
+    const activeTab = (showLogTab && hasLog) ? 'log' : 'result';
+    let tabBar = '';
+    if (hasLog) {
+      tabBar = `<div id="bgTaskTabs" style="display:flex;border-bottom:1px solid var(--border)">
+        <button id="bgTabResult" onclick="switchBgTab('result')" style="flex:1;padding:8px;font-size:12px;font-weight:600;background:none;border:none;cursor:pointer;border-bottom:2px solid ${activeTab==='result'?'var(--blue)':'transparent'};color:${activeTab==='result'?'var(--text)':'var(--muted)'}">Result</button>
+        <button id="bgTabLog" onclick="switchBgTab('log')" style="flex:1;padding:8px;font-size:12px;font-weight:600;background:none;border:none;cursor:pointer;border-bottom:2px solid ${activeTab==='log'?'var(--blue)':'transparent'};color:${activeTab==='log'?'var(--text)':'var(--muted)'}">Tool Log (${toolLog.length})</button>
+      </div>`;
+    }
+
+    // Result panel
+    let resultPanel = `<pre id="bgPanelResult" style="flex:1;overflow:auto;padding:16px;margin:0;font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-word;font-family:monospace;display:${activeTab==='result'?'':'none'}">${esc(content)}</pre>`;
+
+    // Tool log panel
+    let logPanelHtml = '';
+    if (hasLog) {
+      // Group by tool name for summary
+      const toolCounts = {};
+      toolLog.forEach(e => { if (e.type === 'call') toolCounts[e.name] = (toolCounts[e.name]||0)+1; });
+      let summaryHtml = Object.entries(toolCounts).map(([n,c]) => `<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(96,165,250,.1);color:#60a5fa;margin:2px">${esc(n)}×${c}</span>`).join('');
+
+      logPanelHtml = `<div id="bgPanelLog" style="flex:1;overflow:auto;display:${activeTab==='log'?'':'none'};flex-direction:column">`;
+      logPanelHtml += `<div style="padding:8px 16px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:2px">${summaryHtml}</div>`;
       toolLog.forEach(entry => {
         const isCall = entry.type === 'call';
         const icon = isCall ? '▸' : '↳';
         const color = entry.is_error ? '#f87171' : (isCall ? '#60a5fa' : '#4ade80');
         const name = esc(entry.name || '');
-        const preview = esc((entry.preview || '').slice(0, 120));
-        const dur = entry.duration != null ? ` (${entry.duration}ms)` : '';
-        const args = entry.args ? ' ' + Object.entries(entry.args).map(([k,v]) => `${k}=${esc(v)}`).join(' ') : '';
-        logHtml += `<div style="font-size:11px;color:${color};font-family:monospace;padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${icon} ${name}${args}${dur}${preview ? ' — ' + preview : ''}</div>`;
+        const preview = esc(entry.preview || '');
+        const dur = entry.duration != null ? ` <span style="color:#facc15">${entry.duration}ms</span>` : '';
+        const ts = entry.ts ? ` <span style="color:var(--muted);font-size:10px">${entry.ts.split('T')[1]?.split('.')[0]||''}</span>` : '';
+        const argsStr = entry.args ? ' ' + Object.entries(entry.args).map(([k,v]) => `<span style="color:#c084fc">${esc(k)}</span>=<span style="color:#fbbf24">${esc(v)}</span>`).join(' ') : '';
+        const errBadge = entry.is_error ? ' <span style="color:#f87171;font-weight:700">ERROR</span>' : '';
+        logPanelHtml += `<div style="padding:4px 16px;border-bottom:1px solid rgba(255,255,255,.03);font-size:11px;color:${color};font-family:monospace;display:flex;align-items:baseline;gap:4px">`;
+        logPanelHtml += `<span style="flex-shrink:0">${icon}</span>`;
+        logPanelHtml += `<span style="font-weight:600">${name}</span>`;
+        logPanelHtml += argsStr;
+        logPanelHtml += errBadge;
+        logPanelHtml += dur;
+        logPanelHtml += ts;
+        if (preview) logPanelHtml += `<span style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"> — ${preview}</span>`;
+        logPanelHtml += `</div>`;
       });
-      logHtml += `</div></div>`;
+      logPanelHtml += `</div>`;
     }
 
-    // Duration + model badge
-    let metaHtml = '';
-    if (data.duration || data.model) {
-      metaHtml = `<div style="padding:4px 16px;display:flex;gap:8px;align-items:center">`;
-      if (data.duration) metaHtml += `<span style="font-size:10px;color:var(--muted)">⏱ ${esc(data.duration)}</span>`;
-      if (data.model) metaHtml += `<span style="font-size:10px;color:var(--muted)">🤖 ${esc(data.model.split('/').pop())}</span>`;
-      metaHtml += `</div>`;
-    }
-
-    // Show in modal with tabs: Result | Log
     const modal = document.createElement('div');
+    modal.id = 'bgTaskModal';
     modal.style = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
     modal.innerHTML = `
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:720px;max-height:85vh;display:flex;flex-direction:column">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:780px;max-height:85vh;display:flex;flex-direction:column">
   <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-    <span style="font-size:13px;font-weight:600">Task result</span>
-    <button onclick="this.closest('div').parentElement.remove()" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:16px">✕</button>
+    <span style="font-size:13px;font-weight:600">Task ${esc(data.task_id||'').substring(0,8)}</span>
+    <button onclick="document.getElementById('bgTaskModal').remove()" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:16px">✕</button>
   </div>
   ${metaHtml}
-  <pre style="flex:1;overflow:auto;padding:16px;margin:0;font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-word;font-family:monospace">${esc(content)}</pre>
-  ${logHtml}
+  ${tabBar}
+  ${resultPanel}
+  ${logPanelHtml}
 </div>`;
     document.body.appendChild(modal);
     modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
   } catch(e) { showToast('Could not load result: ' + e.message); }
+}
+
+function switchBgTab(tab) {
+  const resultPanel = document.getElementById('bgPanelResult');
+  const logPanel = document.getElementById('bgPanelLog');
+  const tabResult = document.getElementById('bgTabResult');
+  const tabLog = document.getElementById('bgTabLog');
+  if (!resultPanel) return;
+  if (tab === 'result') {
+    resultPanel.style.display = '';
+    if (logPanel) logPanel.style.display = 'none';
+    if (tabResult) { tabResult.style.borderBottom = '2px solid var(--blue)'; tabResult.style.color = 'var(--text)'; }
+    if (tabLog) { tabLog.style.borderBottom = '2px solid transparent'; tabLog.style.color = 'var(--muted)'; }
+  } else {
+    resultPanel.style.display = 'none';
+    if (logPanel) logPanel.style.display = 'flex';
+    if (tabResult) { tabResult.style.borderBottom = '2px solid transparent'; tabResult.style.color = 'var(--muted)'; }
+    if (tabLog) { tabLog.style.borderBottom = '2px solid var(--blue)'; tabLog.style.color = 'var(--text)'; }
+  }
 }
 
 async function cancelBgTask(taskId) {
