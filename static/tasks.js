@@ -376,16 +376,65 @@ async function autoShowTaskLog(taskId) {
     var wrapDiv = document.getElementById('tlw_' + taskId);
     if (!logDiv) return;
 
-    // Lazy-load full result from server
+    // Lazy-load full result + tool_log from server
     var duration = '';
     var charCount = 0;
+    var toolLog = [];
     try {
         var res = await api('/api/task/result?task_id=' + encodeURIComponent(taskId));
         if (res) {
             duration = res.duration || '';
             charCount = (res.result || '').length;
-            if (res.result) {
-                logDiv.innerHTML = formatResultText(res.result);
+            toolLog = res.tool_log || [];
+
+            if (res.result || toolLog.length > 0) {
+                // Build tabbed view: Result | Tool Log
+                var hasLog = toolLog.length > 0;
+                var tabBarHtml = '';
+                if (hasLog) {
+                    tabBarHtml = '<div class="task-log-tabs" style="display:flex;border-bottom:1px solid #1e293b;margin-bottom:4px;">' +
+                        '<button onclick="event.stopPropagation();_switchTaskTab(\'' + escapeHtml(taskId) + '\',\'result\')" ' +
+                        'class="task-tab-btn task-tab-result" ' +
+                        'style="flex:1;padding:3px 6px;font-size:6px;font-weight:600;background:none;border:none;cursor:pointer;' +
+                        'border-bottom:2px solid #7cb9ff;color:#e2e8f0;font-family:monospace;">Result</button>' +
+                        '<button onclick="event.stopPropagation();_switchTaskTab(\'' + escapeHtml(taskId) + '\',\'tools\')" ' +
+                        'class="task-tab-btn task-tab-tools" ' +
+                        'style="flex:1;padding:3px 6px;font-size:6px;font-weight:600;background:none;border:none;cursor:pointer;' +
+                        'border-bottom:2px solid transparent;color:#64748b;font-family:monospace;">🔧 Tools (' + toolLog.length + ')</button>' +
+                        '</div>';
+                }
+
+                var resultHtml = formatResultText(res.result || '');
+                var toolLogHtml = '';
+                if (hasLog) {
+                    // Compact tool log summary + entries
+                    var toolCounts = {};
+                    toolLog.forEach(function(e) { if (e.type === 'call') toolCounts[e.name] = (toolCounts[e.name]||0)+1; });
+                    var summaryParts = Object.entries(toolCounts).map(function(nc) {
+                        return '<span style="font-size:6px;padding:1px 4px;border-radius:2px;background:rgba(96,165,250,.1);color:#60a5fa;margin:1px;">' + escapeHtml(nc[0]) + '×' + nc[1] + '</span>';
+                    }).join('');
+                    toolLogHtml = '<div class="task-toollog-panel" style="display:none;">' +
+                        '<div style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:4px;">' + summaryParts + '</div>';
+                    toolLog.forEach(function(entry) {
+                        var isCall = entry.type === 'call';
+                        var icon = isCall ? '▸' : '↳';
+                        var color = entry.is_error ? '#ff4488' : (isCall ? '#60a5fa' : '#00ff88');
+                        var name = escapeHtml(entry.name || '');
+                        var dur = entry.duration != null ? ' <span style="color:#ffcc00">' + entry.duration + 'ms</span>' : '';
+                        var ts = entry.ts ? ' <span style="color:#475569;font-size:6px">' + escapeHtml(entry.ts.split('T')[1] && entry.ts.split('T')[1].split('.')[0] || '') + '</span>' : '';
+                        var argsStr = entry.args ? ' ' + Object.entries(entry.args).map(function(kv) {
+                            return '<span style="color:#c084fc">' + escapeHtml(kv[0]) + '</span>=<span style="color:#fbbf24">' + escapeHtml(String(kv[1]).substring(0,40)) + '</span>';
+                        }).join(' ') : '';
+                        var errBadge = entry.is_error ? ' <span style="color:#ff4488;font-weight:700">ERROR</span>' : '';
+                        var preview = entry.preview ? ' <span style="color:#475569;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px;display:inline-block;vertical-align:bottom;">' + escapeHtml(entry.preview.substring(0,80)) + '</span>' : '';
+                        toolLogHtml += '<div style="font-size:6px;color:' + color + ';font-family:monospace;padding:1px 0;">' +
+                            '<span>' + icon + '</span> <span style="font-weight:600">' + name + '</span>' + argsStr + errBadge + dur + ts + preview + '</div>';
+                    });
+                    toolLogHtml += '</div>';
+                }
+
+                var resultPanelHtml = '<div class="task-result-panel">' + resultHtml + '</div>';
+                logDiv.innerHTML = tabBarHtml + resultPanelHtml + toolLogHtml;
             } else if (res.error) {
                 logDiv.innerHTML = '<div style="color:#ff4488;font-family:monospace;font-size:11px;">[Error] ' + escapeHtml(res.error) + '</div>';
             }
@@ -398,13 +447,14 @@ async function autoShowTaskLog(taskId) {
     // Add metadata header above the log if not already present
     if (wrapDiv) {
         var existingMeta = wrapDiv.querySelector('.task-log-meta');
-        if (!existingMeta && (duration || charCount > 0)) {
+        if (!existingMeta && (duration || charCount > 0 || toolLog.length > 0)) {
             var metaDiv = document.createElement('div');
             metaDiv.className = 'task-log-meta';
             metaDiv.style.cssText = 'display:flex;gap:8px;margin-bottom:4px;flex-wrap:wrap;';
             var parts = [];
             if (duration) parts.push('<span style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.25);border-radius:2px;padding:1px 5px;font-size:6px;color:#00ff88;font-family:monospace;">⏱ ' + escapeHtml(duration) + '</span>');
             if (charCount > 0) parts.push('<span style="background:rgba(100,116,139,0.15);border:1px solid rgba(100,116,139,0.25);border-radius:2px;padding:1px 5px;font-size:6px;color:#94a3b8;font-family:monospace;">' + charCount.toLocaleString() + ' chars</span>');
+            if (toolLog.length > 0) parts.push('<span style="background:rgba(96,165,250,.1);border:1px solid rgba(96,165,250,.25);border-radius:2px;padding:1px 5px;font-size:6px;color:#60a5fa;font-family:monospace;">🔧 ' + toolLog.length + ' tool calls</span>');
             metaDiv.innerHTML = parts.join('');
             wrapDiv.insertBefore(metaDiv, wrapDiv.firstChild);
         }
@@ -413,6 +463,33 @@ async function autoShowTaskLog(taskId) {
     }
     logDiv.scrollTop = 0;
 }
+
+/* ─── Tab switcher for task log panels ─────────────────────────────────────── */
+
+function _switchTaskTab(taskId, tab) {
+    var logDiv = document.getElementById('tlog_' + taskId);
+    if (!logDiv) return;
+    var resultPanel = logDiv.querySelector('.task-result-panel');
+    var toolPanel = logDiv.querySelector('.task-toollog-panel');
+    var tabBtns = logDiv.querySelectorAll('.task-tab-btn');
+    tabBtns.forEach(function(btn) {
+        btn.style.borderBottom = '2px solid transparent';
+        btn.style.color = '#64748b';
+    });
+    if (tab === 'tools' && toolPanel) {
+        toolPanel.style.display = 'block';
+        if (resultPanel) resultPanel.style.display = 'none';
+        var toolsBtn = logDiv.querySelector('.task-tab-tools');
+        if (toolsBtn) { toolsBtn.style.borderBottom = '2px solid #7cb9ff'; toolsBtn.style.color = '#e2e8f0'; }
+    } else {
+        if (resultPanel) resultPanel.style.display = 'block';
+        if (toolPanel) toolPanel.style.display = 'none';
+        var resultBtn = logDiv.querySelector('.task-tab-result');
+        if (resultBtn) { resultBtn.style.borderBottom = '2px solid #7cb9ff'; resultBtn.style.color = '#e2e8f0'; }
+    }
+}
+
+window._switchTaskTab = _switchTaskTab;
 
 /* ─── Floating result banner ─────────────────────────────────────────────── */
 
@@ -432,6 +509,8 @@ async function showResultBanner(taskId) {
         var resultText = res.result || ('[Error] ' + res.error);
         var duration = res.duration || '';
         var charCount = (res.result || '').length;
+        var toolLog = res.tool_log || [];
+        var toolCallCount = toolLog.filter(function(e) { return e.type === 'call'; }).length;
 
         // Preview: first 300 chars, stripped of markdown for banner
         var preview = resultText.substring(0, 300).replace(/```[\s\S]*?```/g, '[code]').replace(/`[^`]+`/g, '[code]').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\n+/g, ' ').trim();
@@ -455,6 +534,7 @@ async function showResultBanner(taskId) {
             '  <span style="color:' + bannerColor + ';font-family:monospace;font-size:10px;">' + label + '</span>' +
             (duration ? '<span style="color:#475569;font-family:monospace;font-size:9px;">· ' + escapeHtml(duration) + '</span>' : '') +
             (charCount > 0 ? '<span style="color:#475569;font-family:monospace;font-size:9px;">· ' + charCount.toLocaleString() + ' chars</span>' : '') +
+            (toolCallCount > 0 ? '<span style="color:#475569;font-family:monospace;font-size:9px;">· 🔧 ' + toolCallCount + ' tools</span>' : '') +
             '  <div style="margin-left:auto;display:flex;gap:6px;">' +
             '    <button onclick="viewTaskResult(\'' + taskId + '\')" style="background:none;border:1px solid #334155;color:#94a3b8;border-radius:3px;padding:3px 8px;cursor:pointer;font-size:9px;font-family:monospace;">View full</button>' +
             '    <button onclick="copyTaskResult(\'' + taskId + '\')" title="Copy to clipboard" style="background:none;border:1px solid #334155;color:#64748b;border-radius:3px;padding:3px 8px;cursor:pointer;font-size:9px;font-family:monospace;">Copy</button>' +
@@ -561,14 +641,15 @@ async function toggleTaskLog(taskId) {
 
     var btn = wrapDiv ? wrapDiv.querySelector('button') : null;
     if (logDiv.style.display === 'none') {
-        // Lazy-load full result if we only have a cached preview
+        // Lazy-load full result + tool_log if we only have a cached preview
         var logText = logDiv.textContent || '';
         if (logText.length < 200) {
             try {
                 var res = await api('/api/task/result?task_id=' + encodeURIComponent(taskId));
-                if (res && res.result) {
-                    logText = res.result;
-                    logDiv.innerHTML = formatResultText(logText);
+                if (res && (res.result || (res.tool_log && res.tool_log.length > 0))) {
+                    // Re-use autoShowTaskLog which renders the tabbed view
+                    await autoShowTaskLog(taskId);
+                    return;
                 }
             } catch (e) { /* keep cached text */ }
         }
