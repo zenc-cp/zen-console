@@ -18,8 +18,13 @@ import json
 import queue
 import threading
 import time
+from datetime import datetime, timezone
 
 from api.task_store import TaskStore
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 # Live stream subscribers: task_id -> list[queue.Queue]
 # Browser SSE consumers register here to watch a running task in real-time.
@@ -215,11 +220,39 @@ class BackgroundWorker:
                     # Capture thinking tokens too — could store separately if needed
                     pass
 
-                elif event == 'tool_call':
+                elif event == 'tool':
                     self._store.update_progress(task_id, {
                         "tokens": token_count,
                         "current_tool": data.get('name', '') if isinstance(data, dict) else '',
                     })
+                    # Capture tool call to persistent log
+                    try:
+                        tool_entry = {
+                            "type": "call",
+                            "name": data.get('name', '') if isinstance(data, dict) else str(data),
+                            "preview": (data.get('preview', '') if isinstance(data, dict) else '')[:200],
+                            "ts": _utcnow(),
+                        }
+                        if isinstance(data, dict) and data.get('args'):
+                            tool_entry["args"] = {k: str(v)[:80] for k, v in list(data['args'].items())[:3]}
+                        self._store.append_tool_log(task_id, tool_entry)
+                    except Exception:
+                        pass  # tool log is best-effort
+
+                elif event == 'tool_complete':
+                    # Capture tool completion to persistent log
+                    try:
+                        tool_entry = {
+                            "type": "result",
+                            "name": data.get('name', '') if isinstance(data, dict) else '',
+                            "preview": (data.get('preview', '') if isinstance(data, dict) else '')[:200],
+                            "duration": data.get('duration') if isinstance(data, dict) else None,
+                            "is_error": data.get('is_error', False) if isinstance(data, dict) else False,
+                            "ts": _utcnow(),
+                        }
+                        self._store.append_tool_log(task_id, tool_entry)
+                    except Exception:
+                        pass
 
                 elif event == 'done':
                     result_text = ''.join(full_text)

@@ -224,6 +224,7 @@ def handle_task_result(handler, parsed) -> True:
         'created_at': task.get('created_at', ''),
         'started_at': task.get('started_at', ''),
         'completed_at': task.get('completed_at', ''),
+        'tool_log': task.get('tool_log', []),
     }
 
     if task['status'] != 'completed':

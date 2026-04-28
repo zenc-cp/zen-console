@@ -44,7 +44,11 @@ _MIGRATION = """
 ALTER TABLE tasks ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
 """
 
-_JSON_FIELDS = ('attachments', 'progress', 'notify_config')
+_MIGRATION2 = """
+ALTER TABLE tasks ADD COLUMN tool_log TEXT NOT NULL DEFAULT '[]';
+"""
+
+_JSON_FIELDS = ('attachments', 'progress', 'notify_config', 'tool_log')
 
 
 def _utcnow() -> str:
@@ -67,6 +71,10 @@ class TaskStore:
             self._conn.executescript(_MIGRATION)
         except Exception:
             pass  # column already exists
+        try:
+            self._conn.executescript(_MIGRATION2)
+        except Exception:
+            pass  # tool_log column already exists
         self._conn.commit()
 
     # ── helpers ──────────────────────────────────────────────────────────────
@@ -81,9 +89,9 @@ class TaskStore:
                 try:
                     d[field] = json.loads(raw)
                 except (json.JSONDecodeError, TypeError):
-                    d[field] = {} if field != 'attachments' else []
+                    d[field] = {} if field not in ('attachments', 'tool_log') else []
             elif not raw:
-                d[field] = {} if field != 'attachments' else []
+                d[field] = {} if field not in ('attachments', 'tool_log') else []
         return d
 
     def _execute(self, sql, params=()):
@@ -150,6 +158,26 @@ class TaskStore:
         cur = self._execute(
             "UPDATE tasks SET progress = ?, updated_at = ? WHERE task_id = ?",
             (json.dumps(progress), _utcnow(), task_id),
+        )
+        return cur.rowcount > 0
+
+    def append_tool_log(self, task_id: str, entry: dict) -> bool:
+        """Append a single tool log entry to the task's tool_log JSON array."""
+        row = self._fetchone("SELECT tool_log FROM tasks WHERE task_id = ?", (task_id,))
+        if row is None:
+            return False
+        raw = row[0] if isinstance(row[0], str) else '[]'
+        try:
+            log_entries = json.loads(raw) if raw else []
+        except (json.JSONDecodeError, TypeError):
+            log_entries = []
+        log_entries.append(entry)
+        # Cap at 200 entries to prevent unbounded growth
+        if len(log_entries) > 200:
+            log_entries = log_entries[-200:]
+        cur = self._execute(
+            "UPDATE tasks SET tool_log = ?, updated_at = ? WHERE task_id = ?",
+            (json.dumps(log_entries), _utcnow(), task_id),
         )
         return cur.rowcount > 0
 

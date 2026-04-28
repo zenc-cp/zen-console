@@ -262,18 +262,52 @@ function watchBgTask(taskId) {
 async function viewBgTaskResult(taskId) {
   try {
     const data = await api('/api/task/result?task_id=' + encodeURIComponent(taskId));
-    if (!data.result && !data.error) return;
+    if (!data.result && !data.error && !data.tool_log) return;
     const content = data.result || `[Error]\n${data.error}`;
-    // Show in a simple modal
+
+    // Build tool log section
+    let logHtml = '';
+    const toolLog = data.tool_log || [];
+    if (toolLog.length > 0) {
+      logHtml = `<div style="border-top:1px solid var(--border)">`;
+      logHtml += `<div style="padding:8px 16px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">`;
+      logHtml += `<span style="font-size:11px;font-weight:600;color:var(--muted)">Tool Log (${toolLog.length})</span>`;
+      logHtml += `<span style="font-size:10px;color:var(--muted)">▾</span></div>`;
+      logHtml += `<div style="max-height:200px;overflow:auto;padding:0 16px 8px">`;
+      toolLog.forEach(entry => {
+        const isCall = entry.type === 'call';
+        const icon = isCall ? '▸' : '↳';
+        const color = entry.is_error ? '#f87171' : (isCall ? '#60a5fa' : '#4ade80');
+        const name = esc(entry.name || '');
+        const preview = esc((entry.preview || '').slice(0, 120));
+        const dur = entry.duration != null ? ` (${entry.duration}ms)` : '';
+        const args = entry.args ? ' ' + Object.entries(entry.args).map(([k,v]) => `${k}=${esc(v)}`).join(' ') : '';
+        logHtml += `<div style="font-size:11px;color:${color};font-family:monospace;padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${icon} ${name}${args}${dur}${preview ? ' — ' + preview : ''}</div>`;
+      });
+      logHtml += `</div></div>`;
+    }
+
+    // Duration + model badge
+    let metaHtml = '';
+    if (data.duration || data.model) {
+      metaHtml = `<div style="padding:4px 16px;display:flex;gap:8px;align-items:center">`;
+      if (data.duration) metaHtml += `<span style="font-size:10px;color:var(--muted)">⏱ ${esc(data.duration)}</span>`;
+      if (data.model) metaHtml += `<span style="font-size:10px;color:var(--muted)">🤖 ${esc(data.model.split('/').pop())}</span>`;
+      metaHtml += `</div>`;
+    }
+
+    // Show in modal with tabs: Result | Log
     const modal = document.createElement('div');
     modal.style = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
     modal.innerHTML = `
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:640px;max-height:80vh;display:flex;flex-direction:column">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:720px;max-height:85vh;display:flex;flex-direction:column">
   <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
     <span style="font-size:13px;font-weight:600">Task result</span>
     <button onclick="this.closest('div').parentElement.remove()" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:16px">✕</button>
   </div>
+  ${metaHtml}
   <pre style="flex:1;overflow:auto;padding:16px;margin:0;font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-word;font-family:monospace">${esc(content)}</pre>
+  ${logHtml}
 </div>`;
     document.body.appendChild(modal);
     modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
