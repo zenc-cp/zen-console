@@ -42,33 +42,51 @@ def init_task_system():
     return worker
 
 
-def _requeue_dispatch_timeouts(store) -> int:
+def _requeue_dispatch_timeouts(store, max_attempts: int = 3) -> int:
     """Re-queue failed tasks whose error was 'dispatch timeout'.
 
     These tasks failed because the worker wasn't running when they were queued
     (e.g., server was restarting). Give them another chance.
+
+    A retry counter is stored in the task's progress JSON. After
+    ``max_attempts`` requeues a task is left as failed permanently to break
+    the requeue/claim loop that was freezing /api/sessions.
     """
-    import logging
+    import json, logging
     logger = logging.getLogger(__name__)
 
     failed_tasks = store.list_tasks(status='failed', limit=200)
     requeued = 0
+    skipped_max = 0
     for task in failed_tasks:
         error = task.get('error', '')
-        if 'dispatch timeout' in error:
-            try:
-                # Reset to queued so the worker picks them up
-                store.update_status(
-                    task['task_id'],
-                    'queued',
-                    error='',
-                    started_at='',
-                    completed_at='',
-                )
-                requeued += 1
-            except Exception as exc:
-                logger.warning('Failed to re-queue task %s: %s', task['task_id'][:8], exc)
+        if 'dispatch timeout' not in error:
+            continue
+        progress_raw = task.get('progress') or '{}'
+        try:
+            progress = json.loads(progress_raw) if isinstance(progress_raw, str) else dict(progress_raw or {})
+        except (ValueError, TypeError):
+            progress = {}
+        attempts = int(progress.get('requeue_count', 0))
+        if attempts >= max_attempts:
+            skipped_max += 1
+            continue
+        progress['requeue_count'] = attempts + 1
+        try:
+            store.update_status(
+                task['task_id'],
+                'queued',
+                error='',
+                started_at='',
+                completed_at='',
+                progress=json.dumps(progress),
+            )
+            requeued += 1
+        except Exception as exc:
+            logger.warning('Failed to re-queue task %s: %s', task['task_id'][:8], exc)
 
+    if skipped_max:
+        print(f'  [tasks] Left {skipped_max} tasks dead (exceeded {max_attempts} requeue attempts)', flush=True)
     return requeued
 
 
