@@ -1103,11 +1103,11 @@ def get_available_models() -> dict:
 _INDEX_HTML_PATH = REPO_ROOT / "static" / "index.html"
 
 # ── Thread synchronisation ───────────────────────────────────────────────────
-LOCK = threading.Lock()
+LOCK = threading.RLock()  # RLock to permit save()->_write_session_index() reentry
 SESSIONS_MAX = 100
-CHAT_LOCK = threading.Lock()
+CHAT_LOCK = threading.RLock()  # RLock to permit save()->_write_session_index() reentry
 STREAMS: dict = {}
-STREAMS_LOCK = threading.Lock()
+STREAMS_LOCK = threading.RLock()  # RLock to permit save()->_write_session_index() reentry
 CANCEL_FLAGS: dict = {}
 AGENT_INSTANCES: dict = {}  # stream_id -> AIAgent instance for interrupt propagation
 SERVER_START_TIME = time.time()
@@ -1126,7 +1126,7 @@ def _clear_thread_env():
 
 # ── Per-session agent locks ───────────────────────────────────────────────────
 SESSION_AGENT_LOCKS: dict = {}
-SESSION_AGENT_LOCKS_LOCK = threading.Lock()
+SESSION_AGENT_LOCKS_LOCK = threading.RLock()  # RLock to permit save()->_write_session_index() reentry
 
 
 def _get_session_agent_lock(session_id: str) -> threading.Lock:
