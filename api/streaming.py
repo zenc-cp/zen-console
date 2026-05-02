@@ -64,12 +64,39 @@ def _sanitize_messages_for_api(messages):
     The webui stores extra metadata on messages (attachments, timestamp, _ts)
     for display purposes. Some providers (e.g. Z.AI/GLM) reject unknown fields
     instead of ignoring them, causing HTTP 400 errors on subsequent messages.
+
+    Also repairs tool/assistant message pairing:
+    - tool messages without a matching assistant tool_call_id (orphaned by
+      cancellations or crashes) are converted to plain user messages so the
+      provider doesn\'t 422 on missing tool_call_id.
+    - assistant tool_calls referencing ids that have no matching tool reply
+      are stripped (provider also rejects half-pairs).
     """
+    # Pass 1: collect tool_call_ids issued by assistant messages
+    issued_ids = set()
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        if msg.get('role') == 'assistant':
+            for tc in (msg.get('tool_calls') or []):
+                if isinstance(tc, dict) and tc.get('id'):
+                    issued_ids.add(tc['id'])
+
+    # Pass 2: collect tool_call_ids that have a matching tool reply
+    replied_ids = set()
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get('role') == 'tool':
+            tid = msg.get('tool_call_id') or msg.get('tool_use_id')
+            if tid:
+                replied_ids.add(tid)
+
+    # Pass 3: build the sanitized list
     clean = []
     for msg in messages:
         if not isinstance(msg, dict):
             continue
         sanitized = {k: v for k, v in msg.items() if k in _API_SAFE_MSG_KEYS}
+
         # Flatten list content to string (MiniMax and some models reject structured content)
         if isinstance(sanitized.get('content'), list):
             parts = []
@@ -79,11 +106,43 @@ def _sanitize_messages_for_api(messages):
                 elif isinstance(block, str):
                     parts.append(block)
             sanitized['content'] = ' '.join(parts)
-        # Truncate large tool outputs to prevent context bloat
-        if sanitized.get('role') == 'tool':
-            content = sanitized.get('content', '')
-            if isinstance(content, str) and len(content) > 4000:
-                sanitized['content'] = content[:3800] + '\n... [truncated ' + str(len(content)) + ' chars]'
+
+        role = sanitized.get('role')
+
+        # Repair orphaned tool messages (no tool_call_id, or id was never issued)
+        if role == 'tool':
+            tid = sanitized.get('tool_call_id') or sanitized.get('tool_use_id')
+            if not tid or tid not in issued_ids:
+                # Orphan: rewrite as a user message so the provider accepts it.
+                # Prefix the content so the model still has the context.
+                content = sanitized.get('content', '')
+                if isinstance(content, str):
+                    sanitized = {
+                        'role': 'user',
+                        'content': '[orphaned tool output, no matching call] ' + content,
+                    }
+                else:
+                    continue
+            else:
+                # Normalise field name to tool_call_id (drop tool_use_id)
+                sanitized['tool_call_id'] = tid
+                sanitized.pop('tool_use_id', None)
+                # Truncate large tool outputs
+                content = sanitized.get('content', '')
+                if isinstance(content, str) and len(content) > 4000:
+                    sanitized['content'] = content[:3800] + '\n... [truncated ' + str(len(content)) + ' chars]'
+
+        # Strip tool_calls from assistant messages whose ids never got a reply
+        if role == 'assistant' and sanitized.get('tool_calls'):
+            kept = []
+            for tc in sanitized['tool_calls']:
+                if isinstance(tc, dict) and tc.get('id') in replied_ids:
+                    kept.append(tc)
+            if kept:
+                sanitized['tool_calls'] = kept
+            else:
+                sanitized.pop('tool_calls', None)
+
         if sanitized.get('role'):
             clean.append(sanitized)
     return clean

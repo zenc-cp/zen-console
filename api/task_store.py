@@ -122,6 +122,28 @@ class TaskStore:
         notify_config=None,
         profile=None,
     ) -> dict:
+        # Dedup guard: if a task with the same profile + same cycle prefix
+        # is already queued or running, refuse the new enqueue and return
+        # the existing task. Prevents cron over-fire from swarming the queue
+        # when an agent cycle takes longer than its cron interval.
+        # See: zenops dispatch-timeout incident (Apr 29-30, 2026).
+        cycle_key = (prompt or "").strip()[:80]
+        if profile and cycle_key:
+            row = self._fetchone(
+                "SELECT task_id, status FROM tasks "
+                "WHERE profile = ? AND substr(prompt, 1, 80) = ? "
+                "AND status IN ('queued', 'running') LIMIT 1",
+                (profile, cycle_key),
+            )
+            if row:
+                existing = self.get_task(row[0])
+                if existing is not None:
+                    existing["deduped"] = True
+                    existing["dedup_reason"] = (
+                        f"prior task {row[0]} ({row[1]}) for profile='{profile}' "
+                        f"cycle still active"
+                    )
+                return existing
         task_id = uuid.uuid4().hex[:12]
         created_at = _utcnow()
         attachments_json = json.dumps(attachments or [])
