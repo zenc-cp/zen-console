@@ -4,15 +4,17 @@ api/model_router.py -- Auto LLM Router for Hermes WebUI
 Routes user messages to the best model based on intent classification.
 ALL models MUST support tool calling — Hermes requires tools for every interaction.
 
-Rules:
-  - Default: MiniMax M2.7 (fast, cheap, tool-capable)
-  - Code-heavy: Gemma 4 31B (strong at code + tool calling)
-  - Deep reasoning: Qwen3 235B (heavyweight, only for explicitly complex tasks)
-  - Creative: Llama 4 Maverick (narrative, brainstorming)
-  - Quick: Grok 4.1 Fast (concise answers)
-  - Vision: Gemma 4 31B (multimodal)
+H1 migration (2026-06): all models now route through Azure AI Foundry
+(endpoint: foundry-zen-eastus, sub-2 450e3a57, rg-foundry-zen, eastus).
+Keyless Managed Identity auth — no OpenRouter key required.
 
-Codestral is EXCLUDED — it does not support tool calling.
+Rules:
+  - Default: Grok 4.1 Fast Reasoning (fast, tool-capable, Azure Foundry)
+  - Code-heavy: GPT-5.4 Mini (strong at code + full tool support)
+  - Deep reasoning: Claude Sonnet 4.6 (heavyweight, only for explicitly complex tasks)
+  - Creative: Llama 4 Maverick (narrative, brainstorming)
+  - Quick/summarise: Phi-4 (compact, fast)
+  - Vision: GPT-5.4 Mini (multimodal, tool-capable)
 """
 
 from __future__ import annotations
@@ -20,25 +22,26 @@ import re
 
 # ------------------------------------------------------------------ #
 # Router tiers — every model here MUST support function/tool calling
+# All IDs are Azure AI Foundry deployment names (H1 — no openrouter prefix)
 # ------------------------------------------------------------------ #
 
 ROUTER_TIERS = [
     # Tier 1: default / fast (simple Q&A, greetings, general tasks)
     {
-        "id": "openrouter/minimax/minimax-m2.7",
+        "id": "grok-4-1-fast-reasoning",
         "tier": "fast",
-        "label": "MiniMax M2.7",
+        "label": "Grok 4.1 Fast Reasoning",
         "keywords": [],
         "patterns": [
             re.compile(r"^(hi|hey|hello|yo|howdy|what'?s up|sup|greetings)\b", re.I),
             re.compile(r"^(yes|no|ok(ay)?|sure|yeah|yep|nope|lmk)\s*[!\?\.]*\s*$", re.I),
         ],
     },
-    # Tier 2: code (Gemma 4 31B — strong code + full tool support)
+    # Tier 2: code (GPT-5.4 Mini — strong code + full tool support)
     {
-        "id": "openrouter/google/gemma-4-31b-it",
+        "id": "gpt-5.4-mini",
         "tier": "code",
-        "label": "Gemma 4 31B (Code)",
+        "label": "GPT-5.4 Mini (Code)",
         "keywords": [
             "refactor", "debug", "linter", "stack trace", "traceback",
             "code review", "pull request", "unit test", "pytest",
@@ -50,11 +53,11 @@ ROUTER_TIERS = [
             re.compile(r"(code review|PR review|pull request)", re.I),
         ],
     },
-    # Tier 3: reasoning (Qwen3 235B — only for explicitly complex tasks)
+    # Tier 3: reasoning (Claude Sonnet 4.6 — only for explicitly complex tasks)
     {
-        "id": "openrouter/qwen/qwen3-235b-a22b-2507",
+        "id": "claude-sonnet-4.6",
         "tier": "reasoning",
-        "label": "Qwen3 235B (Reasoning)",
+        "label": "Claude Sonnet 4.6 (Reasoning)",
         "keywords": [
             "analyze in depth", "deep analysis", "compare and contrast",
             "system design", "architecture design", "prove", "theorem",
@@ -65,9 +68,9 @@ ROUTER_TIERS = [
             re.compile(r"(prove|demonstrate|mathematical)\b", re.I),
         ],
     },
-    # Tier 4: creative (Llama 4 Maverick)
+    # Tier 4: creative (Llama 4 Maverick via Azure Foundry)
     {
-        "id": "openrouter/meta-llama/llama-4-maverick",
+        "id": "Llama-4-Maverick-17B-128E-Instruct-FP8",
         "tier": "creative",
         "label": "Llama 4 Maverick (Creative)",
         "keywords": [
@@ -79,28 +82,28 @@ ROUTER_TIERS = [
             re.compile(r"(brainstorm|ideate).*(ideas?|concepts?)\b", re.I),
         ],
     },
-    # Tier 5: Grok fast (quick answers)
+    # Tier 5: quick summarise (Phi-4 — compact, fast)
     {
-        "id": "openrouter/x-ai/grok-4.1-fast",
-        "tier": "grok",
-        "label": "Grok 4.1 Fast",
+        "id": "phi-4",
+        "tier": "quick",
+        "label": "Phi-4 (Quick)",
         "keywords": [],
         "patterns": [
             re.compile(r"(summarize|tl ?dr|summary of)\b", re.I),
         ],
     },
-    # Tier 6: vision (image attachments)
+    # Tier 6: vision (image attachments — GPT-5.4 Mini supports multimodal + tools)
     {
-        "id": "openrouter/google/gemma-4-31b-it",
+        "id": "gpt-5.4-mini",
         "tier": "vision",
-        "label": "Gemma 4 31B (Vision)",
+        "label": "GPT-5.4 Mini (Vision)",
         "keywords": [],
         "patterns": [],
         "attachment_required": True,
     },
 ]
 
-DEFAULT_ROUTER_MODEL = "openrouter/minimax/minimax-m2.7"
+DEFAULT_ROUTER_MODEL = "grok-4-1-fast-reasoning"
 
 
 def _score_tier(tier: dict, prompt: str, has_attachment: bool) -> float:

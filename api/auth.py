@@ -2,6 +2,11 @@
 Hermes Web UI -- Optional password authentication.
 Off by default. Enable by setting HERMES_WEBUI_PASSWORD env var
 or configuring a password in the Settings panel.
+
+H1 NOTE: Password auth is deprecated as of the H1 Foundry migration.
+Authentication is handled at the infrastructure layer via Azure Managed
+Identity (id-nanoclaw). Do not set HERMES_WEBUI_PASSWORD in production.
+The module is retained for local-dev convenience only.
 """
 import hashlib
 import hmac

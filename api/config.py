@@ -404,31 +404,18 @@ CLI_TOOLSETS = get_config().get("platform_toolsets", {}).get("cli", _DEFAULT_TOO
 # ── Model / provider discovery ───────────────────────────────────────────────
 
 # Hardcoded fallback models (used when no config.yaml or agent is available)
+# H1: All models route through Azure AI Foundry (foundry-zen-eastus).
 _FALLBACK_MODELS = [
-    {"provider": "MiniMax", "id": "minimax/minimax-m2.7", "label": "MiniMax M2.7"},
-    {"provider": "OpenAI", "id": "openai/o4-mini", "label": "o4-mini"},
-    {
-        "provider": "Anthropic",
-        "id": "anthropic/claude-sonnet-4.6",
-        "label": "Claude Sonnet 4.6",
-    },
-    {
-        "provider": "Anthropic",
-        "id": "anthropic/claude-sonnet-4-5",
-        "label": "Claude Sonnet 4.5",
-    },
-    {
-        "provider": "Anthropic",
-        "id": "anthropic/claude-haiku-4-5",
-        "label": "Claude Haiku 4.5",
-    },
-    {"provider": "Other", "id": "google/gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
-    {
-        "provider": "Other",
-        "id": "deepseek/deepseek-chat-v3-0324",
-        "label": "DeepSeek V3",
-    },
-    {"provider": "Other", "id": "meta-llama/llama-4-scout", "label": "Llama 4 Scout"},
+    {"provider": "Azure Foundry", "id": "grok-4-1-fast-reasoning", "label": "Grok 4.1 Fast Reasoning"},
+    {"provider": "Azure Foundry", "id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+    {"provider": "Azure Foundry", "id": "claude-sonnet-4.6", "label": "Claude Sonnet 4.6"},
+    {"provider": "Azure Foundry", "id": "claude-haiku-4-5", "label": "Claude Haiku 4.5"},
+    {"provider": "Azure Foundry", "id": "Llama-4-Maverick-17B-128E-Instruct-FP8", "label": "Llama 4 Maverick"},
+    {"provider": "Azure Foundry", "id": "Llama-4-Scout-17B-16E-Instruct-FP8", "label": "Llama 4 Scout"},
+    {"provider": "Azure Foundry", "id": "phi-4", "label": "Phi-4"},
+    {"provider": "Azure Foundry", "id": "phi-4-mini-instruct", "label": "Phi-4 Mini"},
+    {"provider": "Azure Foundry", "id": "gpt-5.4", "label": "GPT-5.4"},
+    {"provider": "Azure Foundry", "id": "o4-mini", "label": "o4-mini"},
 ]
 
 # Provider display names for known Hermes provider IDs
@@ -451,6 +438,9 @@ _PROVIDER_DISPLAY = {
     "opencode-zen": "OpenCode Zen",
     "opencode-go": "OpenCode Go",
     "lmstudio": "LM Studio",
+    # H1: Azure AI Foundry
+    "azure": "Azure AI Foundry",
+    "foundry": "Azure AI Foundry",
 }
 
 # Well-known models per provider (used to populate dropdown for direct API providers)
@@ -567,6 +557,19 @@ _PROVIDER_MODELS = {
         {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
         {"id": "gemini-2.0-flash", "label": "Gemini 2.0 Flash"},
     ],
+    # H1: Azure AI Foundry (foundry-zen-eastus) — 10 Foundry-backed deployments
+    "azure": [
+        {"id": "grok-4-1-fast-reasoning", "label": "Grok 4.1 Fast Reasoning"},
+        {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+        {"id": "gpt-5.4", "label": "GPT-5.4"},
+        {"id": "o4-mini", "label": "o4-mini"},
+        {"id": "claude-sonnet-4.6", "label": "Claude Sonnet 4.6"},
+        {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5"},
+        {"id": "Llama-4-Maverick-17B-128E-Instruct-FP8", "label": "Llama 4 Maverick"},
+        {"id": "Llama-4-Scout-17B-16E-Instruct-FP8", "label": "Llama 4 Scout"},
+        {"id": "phi-4", "label": "Phi-4"},
+        {"id": "phi-4-mini-instruct", "label": "Phi-4 Mini"},
+    ],
 }
 
 
@@ -622,6 +625,23 @@ def resolve_model_provider(model_id: str) -> tuple:
     if model_id.startswith("@") and ":" in model_id:
         provider_hint, bare_model = model_id[1:].split(":", 1)
         return bare_model, provider_hint, None
+
+    # H1: Azure AI Foundry routing.
+    # Model IDs from the Foundry catalog are bare deployment names (no slash prefix).
+    # When config provider is 'azure' or 'foundry', or model is in the azure catalog,
+    # route through the Foundry endpoint.
+    _AZURE_FOUNDRY_ENDPOINT = os.getenv(
+        "AZURE_OPENAI_ENDPOINT",
+        "https://foundry-zen-eastus.openai.azure.com/",
+    )
+    _azure_model_ids = {m["id"] for m in _PROVIDER_MODELS.get("azure", [])}
+    if config_provider in ("azure", "foundry"):
+        return model_id, "azure", config_base_url or _AZURE_FOUNDRY_ENDPOINT
+    if model_id in _azure_model_ids and not config_provider:
+        return model_id, "azure", _AZURE_FOUNDRY_ENDPOINT
+    if model_id.startswith("azure/"):
+        bare = model_id[len("azure/"):]
+        return bare, "azure", config_base_url or _AZURE_FOUNDRY_ENDPOINT
 
     if "/" in model_id:
         prefix, bare = model_id.split("/", 1)
