@@ -276,7 +276,7 @@ def _discover_default_workspace() -> Path:
 
 
 DEFAULT_WORKSPACE = _discover_default_workspace()
-DEFAULT_MODEL = os.getenv("HERMES_WEBUI_DEFAULT_MODEL", "minimax/minimax-m2.7")
+DEFAULT_MODEL = os.getenv("HERMES_WEBUI_DEFAULT_MODEL", "azure-foundry/gpt-4o-mini")
 
 
 # ── Startup diagnostics ───────────────────────────────────────────────────────
