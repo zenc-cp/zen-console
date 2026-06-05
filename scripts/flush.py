@@ -130,7 +130,7 @@ SESSION TRANSCRIPT:
 """
 
     payload = json.dumps({
-        "model": "azure-foundry/gpt-4o-mini",
+        "model": "minimax/minimax-m2.7",
         "messages": [
             {"role": "user", "content": prompt}
         ],
