@@ -297,7 +297,8 @@ def _make_mock_streaming(events):
     Returns a mock _run_agent_streaming that pushes `events` into STREAMS[stream_id].
     events: list of (event_name, data_dict)
     """
-    def mock_run(session_id, prompt, model, workspace, stream_id, attachments=None):
+    def mock_run(session_id, prompt, model, workspace, stream_id, attachments=None, background_task=False):
+        assert background_task is True
         from api.streaming import STREAMS
         q = STREAMS.get(stream_id)
         if q is None:

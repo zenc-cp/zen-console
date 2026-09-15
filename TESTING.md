@@ -1,5 +1,24 @@
 # Hermes Web UI: Browser Testing Plan
 
+## Real console producer/session checks (2026-09-15)
+
+Run both scoped checks from the repository with the existing Python 3.11+ and pytest dependency. Keep the artifact directories outside the repository:
+
+```powershell
+python -B scripts/verify_task_adoption.py --artifact-dir "$env:USERPROFILE\.dsh\work\zenops-session-persistence\adoption-check"
+python -B scripts/verify_background_persistence.py --artifact-dir "$env:USERPROFILE\.dsh\work\zenops-session-persistence\persistence-check"
+```
+
+Local results: the original 159 adoption selections pass, and 13 additional selections in `tests/test_background_session_persistence.py` pass. The added suite executes the actual Session/model, streaming engine, task store, worker, helpers, receipt module and cancellation route. Configuration, agent/provider, approval, external session database, redaction and notification/insights dependencies are synthetic. No real credentials, agent, network or child process is used inside the test boundary.
+
+Coverage: foreground success/compression; single tagged background completion with usage/tool-log retention; newer-history preservation; background compression and terminal errors; cancellation, expiry, reclaim and prestart cancellation; cancelled error cleanup; and a real producer thread paused while its driver cancels the task. The real-thread case uses a test-owned short queue wait and joins both threads; it does not change a production deadline or certify arbitrary concurrency schedules.
+
+The new runner launches fresh pytest with `--noconftest`, disabled plugin autoload/cache/bytecode and unique retained synthetic state. It checks every selected case, actual module paths/hashes, source stability, per-case evidence and zero forbidden effects. Outputs are `verification.json`, `pytest.json`, per-case JSON, stdout and stderr in a new run directory. The ordinary full-suite test module needs no special environment variables.
+
+The isolated CI job is configured to run both commands on its existing Python matrix. That configuration is not evidence of a new CI run. Do not run the repository server conftest locally for these checks. Live browser/HTTP/SSE, actual Hermes/provider/tool effects, external SessionDB, other session writers, profile switching and deployment remain separate acceptance work. The fake insights sink proves call ordering, not live database delivery.
+
+---
+
 ## Isolated task-adoption checks (2026-09-14)
 
 **Working-copy evidence, not deployment or browser verification:** 159 selected tests pass, with no skips or deselections. This count covers the four files below, not the historical whole-repository totals later in this document.

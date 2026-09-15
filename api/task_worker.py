@@ -189,6 +189,7 @@ class BackgroundWorker:
                 json.loads(task.get('attachments', '[]'))
                 if isinstance(task.get('attachments'), str)
                 else (task.get('attachments') or []),
+                True,  # background_task: only the winning worker persists history
             ),
             daemon=True,
         )
@@ -277,7 +278,10 @@ class BackgroundWorker:
                         self._broadcast(task_id, event, data)
                         finished_task = self._store.get_execution_task(claim, status='completed')
                         if finished_task is not None:
-                            self._inject_into_session(finished_task, result_text)
+                            self._inject_into_session(
+                                finished_task, result_text,
+                                usage=data.get('usage') if isinstance(data, dict) else None,
+                            )
                             self._notify(finished_task, result_text)
                     break
 
@@ -316,8 +320,8 @@ class BackgroundWorker:
                 subs.pop(i)
 
     @staticmethod
-    def _inject_into_session(task: dict, result: str) -> None:
-        """Append user prompt + assistant result into the session message history.
+    def _inject_into_session(task: dict, result: str, usage=None) -> None:
+        """Append a committed task summary and usage to the latest session state.
 
         This makes background task results appear in the main chat stream
         when the user next loads the session.
@@ -367,7 +371,32 @@ class BackgroundWorker:
                 '_bg_duration': _dur,
                 '_bg_status': task.get('status', ''),
             })
+            if isinstance(usage, dict):
+                session.input_tokens = (session.input_tokens or 0) + (usage.get('input_tokens') or 0)
+                session.output_tokens = (session.output_tokens or 0) + (usage.get('output_tokens') or 0)
+                if usage.get('estimated_cost'):
+                    session.estimated_cost = (session.estimated_cost or 0) + usage['estimated_cost']
+                if session.title in ('Untitled', 'New Chat') or not session.title:
+                    from api.models import title_from
+                    session.title = title_from(session.messages, session.title)
             session.save()
+            if isinstance(usage, dict):
+                try:
+                    from api.config import load_settings
+                    if load_settings().get('sync_to_insights'):
+                        from api.state_sync import sync_session_usage
+                        sync_session_usage(
+                            session_id=session.session_id,
+                            input_tokens=session.input_tokens or 0,
+                            output_tokens=session.output_tokens or 0,
+                            estimated_cost=session.estimated_cost,
+                            model=task.get('model', ''),
+                            title=session.title,
+                            message_count=len(session.messages),
+                        )
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).debug('Failed to sync completed task usage')
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning('Failed to inject task result into session: %s', exc)

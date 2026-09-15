@@ -1,5 +1,17 @@
 # Hermes Web UI: Developer and Architecture Guide
 
+## Background producer session ownership (2026-09-15)
+
+Background task execution passes `background_task=True` to `_run_agent_streaming`; foreground callers keep the default `False`. The background producer deep-copies the existing Session before model/workspace changes and works only on that private copy. It cannot save console session JSON/index state, rename console session identities during compression, or synchronize console insights. Its `apperror` events become the worker's existing terminal `error` events.
+
+The existing task-row claim and terminal CAS remain authoritative. After a winning completion, the worker appends one tagged task prompt/result pair to the latest session and merges usage, default-title generation and optional insights synchronization. It does not insert the producer's duplicate raw chat turn or overwrite newer history/pending fields with a stale full-session snapshot. Intermediate tool evidence remains in the task tool log. Foreground session persistence/compression are unchanged.
+
+The original 159 adoption cases and 13 additional persistence cases passed locally. The latter execute the actual streaming, model, store, worker and cancellation-route code against fake agent/provider/configuration dependencies; one case coordinates real producer/driver threads. See `TESTING.md` for rerunnable commands and evidence limits.
+
+This fences the producer's console session mutations, not every agent side effect. External Hermes SessionDB/tools, initial worker session provisioning, other session writers, cross-process JSON atomicity and post-commit delivery recovery are not converted into a transaction or outbox. Publication, live browser acceptance and deployment are separate gates.
+
+---
+
 ## Working-copy integration: task fencing and receipts (2026-09-14)
 
 **Implemented locally, not deployed.** The release and global test-count statements below remain historical context, not verification of this change.

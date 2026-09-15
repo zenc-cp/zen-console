@@ -52,3 +52,6 @@ jobs:
 
       - name: Run isolated task-adoption checks
         run: python -B scripts/verify_task_adoption.py --artifact-dir "${RUNNER_TEMP}/task-adoption"
+
+      - name: Run isolated background-persistence checks
+        run: python -B scripts/verify_background_persistence.py --artifact-dir "${RUNNER_TEMP}/background-persistence"

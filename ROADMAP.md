@@ -1,5 +1,18 @@
 # Hermes Web UI: Full Parity Roadmap
 
+## Background session boundary (2026-09-15)
+
+- [x] Reproduce cancelled/expired/reclaimed producer writes with real console modules and controlled fake-agent state.
+- [x] Isolate background producer Session mutations; keep existing claim/CAS ownership and foreground behavior.
+- [x] Deliver one tagged completion pair plus usage only after the winning commit; preserve newer history and pending state.
+- [x] Add 13 portable regression cases, including compression, error/prestart cancellation, insights ordering and a real-thread cancellation barrier. Preserve the original 159-case adoption suite.
+- [ ] Verify the updated CI matrix after separately approved publication.
+- [ ] Exercise an explicitly approved live browser/producer acceptance flow.
+
+These are local code/regression outcomes, not deployment or full-system fencing. External tools/databases, other session writers and post-commit recovery remain outside this slice. Receipt UI adoption and Connector remain deferred.
+
+---
+
 ## Task-pattern adoption: working copy (2026-09-14)
 
 Implemented in the existing application, rather than another standalone pilot:
