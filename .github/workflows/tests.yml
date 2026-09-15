@@ -28,3 +28,30 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v --timeout=60
+
+  task-adoption:
+    name: Isolated task adoption (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependency
+        run: python -m pip install pytest
+
+      - name: Run isolated task-adoption checks
+        run: python -B scripts/verify_task_adoption.py --artifact-dir "${RUNNER_TEMP}/task-adoption"
+
+      - name: Run isolated background-persistence checks
+        run: python -B scripts/verify_background_persistence.py --artifact-dir "${RUNNER_TEMP}/background-persistence"

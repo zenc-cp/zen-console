@@ -1,5 +1,39 @@
 # Hermes Web UI: Full Parity Roadmap
 
+## Background session boundary (2026-09-15)
+
+- [x] Reproduce cancelled/expired/reclaimed producer writes with real console modules and controlled fake-agent state.
+- [x] Isolate background producer Session mutations; keep existing claim/CAS ownership and foreground behavior.
+- [x] Deliver one tagged completion pair plus usage only after the winning commit; preserve newer history and pending state.
+- [x] Add 13 portable regression cases, including compression, error/prestart cancellation, insights ordering and a real-thread cancellation barrier. Preserve the original 159-case adoption suite.
+- [x] Reproduce the ordinary-bytecode fixture setup failure and scope bytecode/guard restoration to the fixture before setup. Add two lifecycle regressions, for 15 persistence/harness selections, without changing the original 13 test bodies, assertions or deadlines.
+- [ ] Verify the updated CI matrix after separately approved publication. Run [34953866655](https://github.com/zenc-cp/zen-console/actions/runs/34953866655) for 9aaf1d4 passed all three isolated jobs but failed full Python 3.11 during fixture setup; full 3.12/3.13 were cancelled. The fixture correction needs its own matching-head CI evidence.
+- [ ] Exercise an explicitly approved live browser/producer acceptance flow.
+
+These are local code/regression outcomes, not deployment or full-system fencing. External tools/databases, other session writers and post-commit recovery remain outside this slice. Receipt UI adoption and Connector remain deferred.
+
+---
+
+## Task-pattern adoption: working copy (2026-09-14)
+
+Implemented in the existing application, rather than another standalone pilot:
+
+- [x] Per-execution claims, conditional terminal commits and attempt-specific stream cleanup.
+- [x] Cancellation, stale sweeps and startup requeue wired to captured-state checks; pre-start cancellation preserved.
+- [x] Optional `receipt=1` on the existing task-result endpoint, with unchanged default responses and no acceptance claim.
+- [x] Scoped repository verification: 159 selected tests pass (89 existing task tests and 70 new selections). Coverage includes receipt goldens/guards, migration, concurrent SQLite terminal contenders and the worker-to-result-route/session path.
+
+**Published as draft PR [#7](https://github.com/zenc-cp/zen-console/pull/7), not deployed.** Its initial CI run passed the 159-case isolated suite on Python 3.11, 3.12 and 3.13 but exposed three worker-test setup failures and one static script-order assertion in the full suite.
+
+- [x] Local CI repair: isolate worker-test session persistence/cache and restore the existing UI-before-workspace HTML contract. Preserve all 159 adoption cases and the original assertions/deadlines; add worker error-counter checks.
+- Full-suite success for a repair head must be checked against that head's PR checks, not inferred from local or earlier isolated results.
+
+Further commit, push, deployment and live client/producer operations require separate confirmation. OMH/Connector runtime installation, an outbox, external-effect replay guarantees and a late-output archive are not part of this batch. Connector remains deferred. See `ARCHITECTURE.md` and `TESTING.md` for the actual contract and limits.
+
+The release versions and global test totals in the older roadmap below are historical; they are not fresh full-suite results.
+
+---
+
 > Goal: Full 1:1 parity with the Hermes CLI experience via a clean dark web UI.
 > Everything you can do from the CLI terminal, you can do from this UI.
 >

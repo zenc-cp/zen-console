@@ -53,7 +53,7 @@ def _sweep_once(task_store, streams_dict: dict, streams_lock: threading.Lock) ->
 
     # --- Check running tasks ---
     try:
-        running_tasks = task_store.list_tasks(status='running', limit=200)
+        running_tasks = task_store.list_tasks(status='running', limit=200, include_execution_token=True)
     except Exception as exc:
         logger.error("task_sweeper: error fetching running tasks: %s", exc)
         running_tasks = []
@@ -84,19 +84,19 @@ def _sweep_once(task_store, streams_dict: dict, streams_lock: threading.Lock) ->
                 task_id, age_secs, _RUNNING_TIMEOUT_SECS,
             )
             try:
-                task_store.update_status(
-                    task_id,
-                    'failed',
+                stream_id = task_store.expire_task_if_current(
+                    task,
                     error=f'timeout: task ran for {age_secs}s without completing',
                     completed_at=now.isoformat(),
                 )
-                timed_out_running.append(task_id)
+                if stream_id is not None:
+                    timed_out_running.append((task_id, stream_id))
             except Exception as exc:
                 logger.error("task_sweeper: failed to mark task %s as failed: %s", task_id, exc)
 
     # --- Check queued tasks ---
     try:
-        queued_tasks = task_store.list_tasks(status='queued', limit=200)
+        queued_tasks = task_store.list_tasks(status='queued', limit=200, include_execution_token=True)
     except Exception as exc:
         logger.error("task_sweeper: error fetching queued tasks: %s", exc)
         queued_tasks = []
@@ -116,39 +116,40 @@ def _sweep_once(task_store, streams_dict: dict, streams_lock: threading.Lock) ->
                 task_id, age_secs, _QUEUED_TIMEOUT_SECS,
             )
             try:
-                task_store.update_status(
-                    task_id,
-                    'failed',
+                stream_id = task_store.expire_task_if_current(
+                    task,
                     error=f'dispatch timeout: task queued for {age_secs}s without being picked up',
                     completed_at=now.isoformat(),
                 )
-                timed_out_queued.append(task_id)
+                if stream_id is not None:
+                    timed_out_queued.append((task_id, stream_id))
             except Exception as exc:
                 logger.error("task_sweeper: failed to mark queued task %s as failed: %s", task_id, exc)
 
-    # --- Clean up STREAMS dict for all timed-out tasks ---
+    # Cleanup belongs to the captured winning attempt, not a task-ID lookup.
     all_timed_out = timed_out_running + timed_out_queued
     cleaned_streams = []
     if all_timed_out:
         with streams_lock:
-            for task_id in all_timed_out:
-                stream_id = f"bg_{task_id}"
+            for task_id, stream_id in all_timed_out:
                 if stream_id in streams_dict:
-                    # Put a terminal event in the queue so any live SSE consumer
-                    # receives a clean close before the slot is removed
                     try:
-                        q = streams_dict[stream_id]
-                        q.put_nowait(('error', {
-                            'message': 'Task timed out and was forcibly terminated by the sweeper.',
+                        streams_dict[stream_id].put_nowait(('error', {
+                            'message': 'Task expired; cancellation requested by the sweeper.',
                         }))
                     except Exception:
                         pass
                     del streams_dict[stream_id]
                     cleaned_streams.append(stream_id)
-                # Also clean up CANCEL_FLAGS if accessible
+                # Preserve and signal an existing producer event. The producer
+                # owns its final removal; an unstarted task needs no new flag.
                 try:
                     from api.config import CANCEL_FLAGS
-                    CANCEL_FLAGS.pop(stream_id, None)
+                    flag = CANCEL_FLAGS.get(stream_id)
+                    if isinstance(flag, threading.Event):
+                        flag.set()
+                    elif flag is not None:
+                        CANCEL_FLAGS[stream_id] = True
                 except Exception:
                     pass
 
@@ -156,7 +157,7 @@ def _sweep_once(task_store, streams_dict: dict, streams_lock: threading.Lock) ->
         'running_timed_out': len(timed_out_running),
         'queued_timed_out':  len(timed_out_queued),
         'streams_cleaned':   len(cleaned_streams),
-        'task_ids':          all_timed_out,
+        'task_ids':          [task_id for task_id, _ in all_timed_out],
     }
 
     if any(v > 0 for k, v in summary.items() if isinstance(v, int)):

@@ -210,11 +210,11 @@ class TestCleanupStaleRunning:
         task = tmp_store.create_task("s", "p", "m", "w")
         tmp_store.claim_task(task["task_id"])
 
-        # Manually backdate started_at to be 31 minutes ago
+        # Fixture-only SQL: both execution age and heartbeat are stale.
         past = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
         tmp_store._execute(
-            "UPDATE tasks SET started_at = ? WHERE task_id = ?",
-            (past, task["task_id"]),
+            "UPDATE tasks SET started_at = ?, updated_at = ? WHERE task_id = ?",
+            (past, past, task["task_id"]),
         )
 
         count = tmp_store.cleanup_stale_running(timeout_minutes=30)
@@ -297,7 +297,8 @@ def _make_mock_streaming(events):
     Returns a mock _run_agent_streaming that pushes `events` into STREAMS[stream_id].
     events: list of (event_name, data_dict)
     """
-    def mock_run(session_id, prompt, model, workspace, stream_id, attachments=None):
+    def mock_run(session_id, prompt, model, workspace, stream_id, attachments=None, background_task=False):
+        assert background_task is True
         from api.streaming import STREAMS
         q = STREAMS.get(stream_id)
         if q is None:
@@ -328,6 +329,20 @@ class TestWorkerLifecycle:
 
 
 class TestWorkerProcessesTask:
+    @pytest.fixture(autouse=True)
+    def isolated_worker_sessions(self, tmp_path, monkeypatch):
+        """Worker model APIs run in pytest, not in the isolated HTTP server."""
+        from collections import OrderedDict
+        from api import config, models
+
+        session_dir = tmp_path / 'sessions'
+        session_dir.mkdir()
+        sessions = OrderedDict()
+        for module in (config, models):
+            monkeypatch.setattr(module, 'SESSION_DIR', session_dir, raising=False)
+            monkeypatch.setattr(module, 'SESSION_INDEX_FILE', session_dir / '_index.json', raising=False)
+            monkeypatch.setattr(module, 'SESSIONS', sessions, raising=False)
+
     def test_worker_processes_queued_task(self, tmp_store):
         """Worker picks up queued task → status becomes running (and eventually completed)."""
         from api.task_worker import BackgroundWorker
@@ -355,6 +370,7 @@ class TestWorkerProcessesTask:
             worker.stop()
 
         final = tmp_store.get_task(task["task_id"])
+        assert worker.status()["errors"] == 0
         assert final["status"] == "completed"
         assert "Four" in final["result"]
 
@@ -379,6 +395,7 @@ class TestWorkerProcessesTask:
             worker.stop()
 
         final = tmp_store.get_task(task["task_id"])
+        assert worker.status()["errors"] == 1
         assert final["status"] == "failed"
         assert "Agent exploded" in final["error"]
 
@@ -430,6 +447,7 @@ class TestWorkerProcessesTask:
             worker.stop()
 
         final = tmp_store.get_task(task["task_id"])
+        assert worker.status()["errors"] == 0
         assert final["status"] == "completed"
         assert final["result"] == "one two three"
 

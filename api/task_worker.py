@@ -71,10 +71,12 @@ class BackgroundWorker:
                     time.sleep(self._poll_interval)
                     continue
 
-                if not self._store.claim_task(task['task_id']):
+                claim = self._store.claim_execution(task['task_id'])
+                if claim is None:
                     continue  # someone else claimed it
-
-                self._execute_task(task)
+                claimed_task = self._store.get_execution_task(claim)
+                if claimed_task is not None:
+                    self._execute_task(dict(claimed_task, _execution_claim=claim))
             except Exception:
                 # Never let the loop die due to an unexpected exception
                 self._errors += 1
@@ -93,7 +95,10 @@ class BackgroundWorker:
         from api.streaming import _run_agent_streaming, STREAMS, STREAMS_LOCK
 
         task_id = task['task_id']
-        stream_id = f"bg_{task_id}"
+        claim = task.get('_execution_claim')
+        if not self._store.is_current_execution(claim) or claim.task_id != task_id:
+            return
+        stream_id = claim.stream_id
 
         # Task 4: Apply profile before agent run
         _prev_profile = None
@@ -138,6 +143,11 @@ class BackgroundWorker:
         """Internal: run agent pipeline for a task and capture all events."""
         from api.streaming import _run_agent_streaming, STREAMS, STREAMS_LOCK
 
+        claim = task.get('_execution_claim')
+        if (not self._store.is_current_execution(claim)
+                or claim.task_id != task_id or claim.stream_id != stream_id):
+            return
+
         # Ensure the session exists — background tasks may use a fresh session_id
         from api.models import get_session, new_session
         session_id = task['session_id']
@@ -179,6 +189,7 @@ class BackgroundWorker:
                 json.loads(task.get('attachments', '[]'))
                 if isinstance(task.get('attachments'), str)
                 else (task.get('attachments') or []),
+                True,  # background_task: only the winning worker persists history
             ),
             daemon=True,
         )
@@ -194,15 +205,21 @@ class BackgroundWorker:
                 try:
                     event, data = q.get(timeout=60)
                 except queue.Empty:
-                    # Heartbeat — update progress to show we're still alive
+                    if not self._store.is_current_execution(claim):
+                        break
+                    # Heartbeat for a still-current execution.
                     self._store.update_progress(task_id, {
                         "tokens": token_count,
                         "status": "waiting",
                     })
                     continue
 
-                # Broadcast event to any live SSE subscribers
-                self._broadcast(task_id, event, data)
+                # Preview events are not terminal success. Terminal publication
+                # is gated by the database commit below.
+                if event not in ('done', 'error', 'cancel'):
+                    if not self._store.is_current_execution(claim):
+                        break
+                    self._broadcast(task_id, event, data)
 
                 if event == 'token':
                     text = data.get('text', '') if isinstance(data, dict) else str(data)
@@ -256,12 +273,16 @@ class BackgroundWorker:
 
                 elif event == 'done':
                     result_text = ''.join(full_text)
-                    self._store.set_result(task_id, result_text, status='completed')
-                    self._processed += 1
-                    # Inject into session message history
-                    self._inject_into_session(task, result_text)
-                    # Fire notification
-                    self._notify(task, result_text)
+                    if self._store.finish_execution(claim, status='completed', result=result_text):
+                        self._processed += 1
+                        self._broadcast(task_id, event, data)
+                        finished_task = self._store.get_execution_task(claim, status='completed')
+                        if finished_task is not None:
+                            self._inject_into_session(
+                                finished_task, result_text,
+                                usage=data.get('usage') if isinstance(data, dict) else None,
+                            )
+                            self._notify(finished_task, result_text)
                     break
 
                 elif event in ('error', 'cancel'):
@@ -270,8 +291,9 @@ class BackgroundWorker:
                         if isinstance(data, dict)
                         else str(data)
                     )
-                    self._store.update_status(task_id, 'failed', error=error_msg)
-                    self._errors += 1
+                    if self._store.finish_execution(claim, status='failed', error=error_msg):
+                        self._errors += 1
+                        self._broadcast(task_id, event, data)
                     break
 
         finally:
@@ -298,8 +320,8 @@ class BackgroundWorker:
                 subs.pop(i)
 
     @staticmethod
-    def _inject_into_session(task: dict, result: str) -> None:
-        """Append user prompt + assistant result into the session message history.
+    def _inject_into_session(task: dict, result: str, usage=None) -> None:
+        """Append a committed task summary and usage to the latest session state.
 
         This makes background task results appear in the main chat stream
         when the user next loads the session.
@@ -349,7 +371,32 @@ class BackgroundWorker:
                 '_bg_duration': _dur,
                 '_bg_status': task.get('status', ''),
             })
+            if isinstance(usage, dict):
+                session.input_tokens = (session.input_tokens or 0) + (usage.get('input_tokens') or 0)
+                session.output_tokens = (session.output_tokens or 0) + (usage.get('output_tokens') or 0)
+                if usage.get('estimated_cost'):
+                    session.estimated_cost = (session.estimated_cost or 0) + usage['estimated_cost']
+                if session.title in ('Untitled', 'New Chat') or not session.title:
+                    from api.models import title_from
+                    session.title = title_from(session.messages, session.title)
             session.save()
+            if isinstance(usage, dict):
+                try:
+                    from api.config import load_settings
+                    if load_settings().get('sync_to_insights'):
+                        from api.state_sync import sync_session_usage
+                        sync_session_usage(
+                            session_id=session.session_id,
+                            input_tokens=session.input_tokens or 0,
+                            output_tokens=session.output_tokens or 0,
+                            estimated_cost=session.estimated_cost,
+                            model=task.get('model', ''),
+                            title=session.title,
+                            message_count=len(session.messages),
+                        )
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).debug('Failed to sync completed task usage')
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning('Failed to inject task result into session: %s', exc)

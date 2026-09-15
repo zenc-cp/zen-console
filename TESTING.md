@@ -1,5 +1,73 @@
 # Hermes Web UI: Browser Testing Plan
 
+## Real console producer/session checks (2026-09-15)
+
+Run both scoped checks from the repository with the existing Python 3.11+ and pytest dependency. Keep the artifact directories outside the repository:
+
+```powershell
+python -B scripts/verify_task_adoption.py --artifact-dir "$env:USERPROFILE\.dsh\work\zenops-session-persistence\adoption-check"
+python -B scripts/verify_background_persistence.py --artifact-dir "$env:USERPROFILE\.dsh\work\zenops-session-persistence\persistence-check"
+```
+
+The scoped corpus is the original 159 adoption selections plus 15 selections in `tests/test_background_session_persistence.py`: 13 unchanged persistence behavior cases and two fixture-lifecycle regressions. The suite executes the actual Session/model, streaming engine, task store, worker, helpers, receipt module and cancellation route. Configuration, agent/provider, approval, external session database, redaction and notification/insights dependencies are synthetic. No real credentials, agent, network or child process is used inside the test boundary.
+
+Coverage: foreground success/compression; single tagged background completion with usage/tool-log retention; newer-history preservation; background compression and terminal errors; cancellation, expiry, reclaim and prestart cancellation; cancelled error cleanup; and a real producer thread paused while its driver cancels the task. The real-thread case uses a test-owned short queue wait and joins both threads; it does not change a production deadline or certify arbitrary concurrency schedules.
+
+The runner launches fresh pytest with `--noconftest`, disabled plugin autoload/cache/bytecode and unique retained synthetic state. It checks every selected case, actual module paths/hashes, source stability, per-case evidence and zero forbidden effects. Outputs are `verification.json`, `pytest.json`, per-case JSON, stdout and stderr in a new run directory. The fixture now manages its own temporary bytecode policy and guard restoration before setup, rather than relying on caller `-B` or special probe variables.
+
+CI run [34953866655](https://github.com/zenc-cp/zen-console/actions/runs/34953866655) for 9aaf1d4 passed all three isolated jobs, but full Python 3.11 encountered 13 fixture-setup errors and a leaked audit guard that blocked pytest cache/temporary-file cleanup. Full 3.12/3.13 were cancelled by fail-fast. A clean scoped source-copy reproduction confirmed that bytecode writes in `spec.loader.exec_module` initiated the failure: ordinary bytecode produced 13 setup errors, while `-B` passed all 13 with pytest cache still enabled. The earlier non-probe replay also used `-B` and did not cover this dimension.
+
+Two new regressions first failed on the unchanged fixture while the original 13 passed. They check a bytecode-enabled caller and guard restoration after an injected pre-yield setup error. With fixture-owned monkeypatch restoration, all 15 pass in fresh bytecode-on and bytecode-off probes with pytest cache enabled; no leaked-guard containment reset is needed. Original behavior tests, audit prohibitions, skips and production/test deadlines are not weakened.
+
+The isolated CI job runs both commands on its existing Python matrix; the follow-up repair still requires matching-head CI evidence. Do not run the repository server conftest locally for these checks. Live browser/HTTP/SSE, actual Hermes/provider/tool effects, external SessionDB, other session writers, profile switching and deployment remain separate acceptance work. The fake insights sink proves call ordering, not live database delivery.
+
+---
+
+## Isolated task-adoption checks (2026-09-14)
+
+**Working-copy evidence, not deployment or browser verification:** 159 selected tests pass, with no skips or deselections. This count covers the four files below, not the historical whole-repository totals later in this document.
+
+Run from the repository with Python 3.11+ and the existing pytest dependency:
+
+```powershell
+python -B scripts/verify_task_adoption.py --artifact-dir "$env:USERPROFILE\.dsh\work\zenops-ci-repair\adoption-check"
+```
+
+The runner uses a new retained `test-runs/verify-<uuid>` directory for every invocation. It runs pytest in a fresh child process with `--noconftest`, disabled plugin autoload/cache/bytecode and a unique synthetic `--basetemp`. It writes `verification.json`, `pytest.json`, `stdout.txt` and `stderr.txt`. The report checks actual working-copy import paths, source stability, full selection and test outcomes. When `baseline-inputs.json` is present in the artifact directory, it also enforces the pinned unrelated-file/historical-evidence hashes and approved write set; use a different artifact directory for a deliberately different baseline.
+
+Selected files:
+
+- `tests/test_background_tasks_1_2.py`: 34 existing store/worker tests.
+- `tests/test_background_tasks_3_4.py`: 55 existing route/notification/startup tests.
+- `tests/test_task_fencing.py`: 34 ownership, maintenance, migration and consumer-path selections.
+- `tests/test_task_result_receipt.py`: 36 route/conformance selections, including all six literal golden vectors and 14 instrumented guard cases.
+
+The actual store, worker, routes, sweeper, startup integration, notification helpers and receipt module are imported from this repository. Configuration, sessions, producer and profile dependencies are synthetic. Socket/process guards apply during tests and their fixtures; pytest's Windows platform discovery initializes outside those guards. Native worker threads and separate SQLite connections use only newly created synthetic state. Some notification tests intentionally consume/delete their own synthetic files.
+
+`tests/conftest.py` is intentionally not loaded: its server fixture terminates a port owner, deletes state and starts a server. Do not substitute a repository-wide pytest invocation for this isolated check. The pre-start cancellation regression executes only the bounded initialization fragment from the real streaming source via AST, not the live producer.
+
+The test matrix covers commit-before-publication, cancellation immediately before commit, stale/reclaimed attempts, heartbeat and queued-sweep races, cancellation across two SQLite connections, concurrent terminal contenders, migration failure propagation, unchanged default result payloads and worker result delivery into the receipt route and synthetic session history. A post-commit-failure test explicitly demonstrates the notification-loss window: this is not an exactly-once/outbox implementation.
+
+Not exercised by the isolated suite: real agents or credentials, actual HTTP/SSE clients, profile changes, live notification delivery, multiprocess SQLite or deployment. Linux isolated-matrix evidence is recorded below. The older manual browser procedures and global totals remain historical guidance, not evidence that those live surfaces were run for this change.
+
+### CI collection boundary (2026-09-15)
+
+`.github/workflows/tests.yml` retains the existing server-suite job and adds a separate `task-adoption` job for Python 3.11, 3.12 and 3.13. Each isolated job has read-only repository permissions, a ten-minute limit and runs `scripts/verify_task_adoption.py`, with artifacts under `${RUNNER_TEMP}/task-adoption`.
+
+The server conftest excludes only `test_task_fencing.py` and `test_task_result_receipt.py` through `collect_ignore`. The isolated runner explicitly selects both with `--noconftest`, so this exclusion does not skip their required cases. The 89 existing task tests remain selected by both jobs. Server discovery, startup and cleanup fixtures are unchanged; their Hermes/runtime prerequisites are not replaced by the isolated job.
+
+Initial publication CI run [34924820271](https://github.com/zenc-cp/zen-console/actions/runs/34924820271), for `afe92bf`, passed all 159 isolated cases on Linux/Python 3.11, 3.12 and 3.13. The full Python 3.12 suite reported 4 failed, 1277 passed and 52 skipped; the other two full-suite jobs were cancelled. The failures were three `TestWorkerProcessesTask` completion/error cases and `test_module_load_order_correct`. This is baseline evidence, not a green full-suite claim for a subsequent repair.
+
+### CI repair validation
+
+The worker tests now initialize per-test session storage, index and a shared `OrderedDict` for the config/model aliases. A separate controlled probe using the real session model reproduced the three original failures when storage was absent; creating only that directory made the unchanged cases pass. The fixture removes this test-process dependency without changing production session or worker code. Additional error-counter assertions expect zero for completion and one for the deliberately injected agent error.
+
+The HTML swaps only the UI/workspace script tags to satisfy the existing order assertion, which remains unchanged. Pre-publication candidate checks passed the three real-session worker cases, all 159 isolated adoption cases and the original UI assertion against static HTML. An offline Node VM check evaluated the unchanged UI/workspace scripts in both orders at root and prefixed paths: four initialization checks passed using synthetic DOM/storage/fetch. This is not browser E2E or live HTTP verification.
+
+No timeout increase, test exclusion, added skip or workflow change is part of this repair. Verify all six jobs against the repair head's PR checks after an approved publication; local results and the initial CI run do not establish that outcome. Prior integration reports remain immutable historical evidence.
+
+---
+
 > This document is for manual browser testing by you or by a Claude browser agent.
 > It covers user-facing features of the UI through v0.50.21 and later releases.
 > Each section is written as a step-by-step test procedure with expected outcomes.

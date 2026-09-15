@@ -1,5 +1,47 @@
 # Hermes Web UI: Developer and Architecture Guide
 
+## Background producer session ownership (2026-09-15)
+
+Background task execution passes `background_task=True` to `_run_agent_streaming`; foreground callers keep the default `False`. The background producer deep-copies the existing Session before model/workspace changes and works only on that private copy. It cannot save console session JSON/index state, rename console session identities during compression, or synchronize console insights. Its `apperror` events become the worker's existing terminal `error` events.
+
+The existing task-row claim and terminal CAS remain authoritative. After a winning completion, the worker appends one tagged task prompt/result pair to the latest session and merges usage, default-title generation and optional insights synchronization. It does not insert the producer's duplicate raw chat turn or overwrite newer history/pending fields with a stale full-session snapshot. Intermediate tool evidence remains in the task tool log. Foreground session persistence/compression are unchanged.
+
+The regression corpus retains the 159 adoption cases and 13 persistence behavior cases, plus two fixture-lifecycle cases. The persistence cases execute the actual streaming, model, store, worker and cancellation-route code against fake agent/provider/configuration dependencies; one case coordinates real producer/driver threads. See `TESTING.md` for rerunnable commands and evidence limits.
+
+Test isolation does not depend on caller `-B`: the fixture temporarily disables bytecode writes and registers monkeypatch-managed guard restoration before loading modules or constructing session state. A pre-yield setup failure therefore restores the previous guard instead of contaminating unrelated tests or pytest cleanup. The two added cases check caller bytecode/guard restoration and setup-failure cleanup. This changes the test harness, not the runtime contract above.
+
+This fences the producer's console session mutations, not every agent side effect. External Hermes SessionDB/tools, initial worker session provisioning, other session writers, cross-process JSON atomicity and post-commit delivery recovery are not converted into a transaction or outbox. Publication, live browser acceptance and deployment are separate gates.
+
+---
+
+## Working-copy integration: task fencing and receipts (2026-09-14)
+
+**Implemented locally, not deployed.** The release and global test-count statements below remain historical context, not verification of this change.
+
+- `TaskStore.claim_execution` atomically claims a queued task with an immutable version-1 `ExecutionClaim` and a fresh UUID token. The worker retains that claim and uses an attempt-specific `bg_<task_id>_<token>` stream. Ordinary task dictionaries omit `execution_token`.
+- `finish_execution` requires the matching token and `status='running'`. Only a winning terminal commit permits the worker's terminal broadcast, session-history injection and notification. Completion metadata is reread for that execution, rather than taken from the pre-claim queued task.
+- Cancellation compares the captured status and token before signaling that attempt. Queued cancellation creates no producer flag. Producer startup preserves an already-set cancellation event. Sweeper expiry compares the captured task/status/token/start/create/update fields and cleans only the winning attempt's stream.
+- Startup dispatch-timeout requeue uses a captured-state conditional update and preserves the existing three-requeue limit. Startup stale-running cleanup also checks heartbeat age. The separate atomic absolute-age policy in `_fail_old_tasks` is unchanged.
+- Legacy `set_result` and `update_status` are limited to never-claimed queued rows. `claim_task` remains a boolean compatibility wrapper, but callers that execute work must retain `claim_execution` and use `finish_execution`. Do not pair a boolean claim with an unowned terminal setter. Synthetic fixtures use explicit SQL when backdating a claimed row.
+
+### Existing result consumer
+
+`GET /api/task/result` has an optional `receipt=1` query parameter. Default callers keep their existing payload, and do not invoke the projector. Opt-in adds `receipt` with `kind`, `reason`, `accepted=false`, and `record` (the receipt object when received, otherwise null). The source scope is fixed to `zen-console-task-result`. `record` is transported as a JSON object, not verbatim canonical bytes; serialize it with sorted keys and compact separators before supplying it as `previous` to the pure Python API.
+
+`api/result_receipt.py` is pure standard-library code: exact UTF-8 snapshot hashing, canonical JSON, domain-separated receipt identity and strict prior-receipt validation. Limits are 65,536 result characters, 65,536 snapshot bytes and 4,096 prior-receipt bytes; a valid receipt is at most 436 bytes. The HTTP route neither accepts a prior receipt nor exports a second snapshot. It still returns its existing result field, whose response size is not newly capped.
+
+### Boundaries
+
+This adopts the useful fencing and receipt patterns, not the OMH or Connector runtimes. Receipts prove an observed text snapshot, not correctness, authenticated origin or acceptance. No outbox, exactly-once publication, external-tool idempotency, durable late-output archive or OS security boundary is added. A crash after commit can lose notification, and replay will not repair it. Preview/progress/tool-log writes are not promoted to terminal success; their legacy store APIs are not fully execution-fenced.
+
+See the scoped checks in `TESTING.md`. The isolated adoption suite passed on Linux with Python 3.11, 3.12 and 3.13 in CI run 34924820271. Real producers, profile switching, live HTTP/SSE adoption flows, external notification delivery and multiprocess SQLite remain unverified. Mixed-version workers are not supported by this integration.
+
+### CI repair boundary
+
+Worker unit tests execute the session model in the pytest process, not the server subprocess. Their class-scoped fixture now creates per-test session storage and gives `api.config` and `api.models` the same temporary session directory, index and session cache. This removes dependence on initialized user/runtime state without changing the worker, its execution claims or terminal fencing. `static/index.html` restores UI-before-workspace script order to match the existing regression contract; both are loaded before their consumers. This is a test-isolation and static-load-order repair, not a runtime redesign or deployment.
+
+---
+
 > This document is the canonical reference for anyone (human or agent) working on the
 > Hermes Web UI. It covers the exact current state of the code, every design decision and
 > quirk discovered during development, and a phased architecture improvement roadmap that

@@ -75,19 +75,20 @@ def handle_task_cancel(handler, body) -> True:
 
     task_id = body['task_id']
 
-    # Also set the cancel flag if the task has an active stream
-    stream_id = f"bg_{task_id}"
-    try:
-        import threading
-        from api.config import CANCEL_FLAGS, STREAMS_LOCK
-        with STREAMS_LOCK:
-            if stream_id not in CANCEL_FLAGS or not isinstance(CANCEL_FLAGS.get(stream_id), threading.Event):
-                CANCEL_FLAGS[stream_id] = threading.Event()
-            CANCEL_FLAGS[stream_id].set()
-    except Exception:
-        pass
-
-    cancelled = get_task_store().cancel_task(task_id)
+    # Commit first, then signal only the captured attempt, never a newer one.
+    cancelled, stream_id = get_task_store().cancel_task_with_stream(task_id)
+    if cancelled and stream_id is not None:
+        try:
+            import threading
+            from api.config import CANCEL_FLAGS, STREAMS_LOCK
+            with STREAMS_LOCK:
+                # A queued task has no producer to consume a new orphan flag.
+                if stream_id in CANCEL_FLAGS or stream_id != f"bg_{task_id}":
+                    if not isinstance(CANCEL_FLAGS.get(stream_id), threading.Event):
+                        CANCEL_FLAGS[stream_id] = threading.Event()
+                    CANCEL_FLAGS[stream_id].set()
+        except Exception:
+            pass
     j(handler, {'ok': True, 'cancelled': cancelled})
     return True
 
@@ -181,7 +182,7 @@ def handle_task_list(handler, parsed) -> True:
 def handle_task_result(handler, parsed) -> True:
     """Get the result (or partial progress) for a task.
 
-    Query params: task_id
+    Query params: task_id, optional receipt=1 for a non-accepting snapshot receipt.
     """
     params = _qs(parsed)
     task_id = params.get('task_id', '').strip()
@@ -229,6 +230,18 @@ def handle_task_result(handler, parsed) -> True:
 
     if task['status'] != 'completed':
         payload['progress'] = task.get('progress', {})
+
+    if params.get('receipt') == '1':
+        import json
+        from api.result_receipt import project_result
+        outcome = project_result(payload, expected_task_id=task_id, source_scope='zen-console-task-result')
+        # Observation only: no acceptance, snapshot export or extra persistence.
+        payload['receipt'] = {
+            'kind': outcome.kind,
+            'reason': outcome.reason,
+            'accepted': False,
+            'record': json.loads(outcome.receipt) if outcome.receipt is not None else None,
+        }
 
     j(handler, payload)
     return True

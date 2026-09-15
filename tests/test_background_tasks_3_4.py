@@ -207,11 +207,15 @@ class TestHandleTaskCancel:
     def test_handle_task_cancel_sets_cancel_flag(self, handler, store):
         from api.task_routes import handle_task_cancel
         import api.config as cfg
+        import threading
         task = _make_task(store)
+        claim = store.claim_execution(task['task_id'])
+        assert claim is not None
         body = {'task_id': task['task_id']}
         handle_task_cancel(handler, body)
-        stream_id = f"bg_{task['task_id']}"
-        assert cfg.CANCEL_FLAGS.get(stream_id) is True
+        assert handler.response_json()['cancelled'] is True
+        flag = cfg.CANCEL_FLAGS.get(claim.stream_id)
+        assert isinstance(flag, threading.Event) and flag.is_set()
 
 
 class TestHandleTaskRetry:
@@ -664,10 +668,13 @@ class TestInitTaskSystem:
             session_id='sess', prompt='stale', model='', workspace=''
         )
         store.claim_task(task['task_id'])
-        # Artificially age the started_at
+        # Fixture-only SQL: legacy setters cannot mutate claimed executions.
         from datetime import datetime, timezone, timedelta
         old_start = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-        store.update_status(task['task_id'], 'running', started_at=old_start)
+        store._execute(
+            'UPDATE tasks SET started_at = ?, updated_at = ? WHERE task_id = ?',
+            (old_start, old_start, task['task_id']),
+        )
 
         try:
             init_task_system()

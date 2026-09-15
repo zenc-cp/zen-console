@@ -55,7 +55,7 @@ def _requeue_dispatch_timeouts(store, max_attempts: int = 3) -> int:
     import json, logging
     logger = logging.getLogger(__name__)
 
-    failed_tasks = store.list_tasks(status='failed', limit=200)
+    failed_tasks = store.list_tasks(status='failed', limit=200, include_execution_token=True)
     requeued = 0
     skipped_max = 0
     for task in failed_tasks:
@@ -73,15 +73,8 @@ def _requeue_dispatch_timeouts(store, max_attempts: int = 3) -> int:
             continue
         progress['requeue_count'] = attempts + 1
         try:
-            store.update_status(
-                task['task_id'],
-                'queued',
-                error='',
-                started_at='',
-                completed_at='',
-                progress=json.dumps(progress),
-            )
-            requeued += 1
+            if store.requeue_task_if_current(task, progress=progress):
+                requeued += 1
         except Exception as exc:
             logger.warning('Failed to re-queue task %s: %s', task['task_id'][:8], exc)
 

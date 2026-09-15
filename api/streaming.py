@@ -2,6 +2,7 @@
 Hermes Web UI -- SSE streaming engine and agent thread runner.
 Includes Sprint 10 cancel support via CANCEL_FLAGS.
 """
+import copy
 import json
 import logging
 import os
@@ -155,18 +156,30 @@ def _sse(handler, event, data):
     handler.wfile.flush()
 
 
-def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, attachments=None):
-    """Run agent in background thread, writing SSE events to STREAMS[stream_id]."""
+def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, attachments=None, background_task=False):
+    """Stream an agent run; background tasks use private, non-persisted state.
+
+    The background worker owns console history/usage delivery after its fenced
+    terminal commit. Foreground chat retains its normal session persistence.
+    """
     q = STREAMS.get(stream_id)
     if q is None:
         return
 
     # Sprint 10: create a cancel event for this stream
-    cancel_event = threading.Event()
     with STREAMS_LOCK:
-        CANCEL_FLAGS[stream_id] = cancel_event
+        cancel_event = CANCEL_FLAGS.get(stream_id)
+        if not isinstance(cancel_event, threading.Event):
+            # Preserve legacy truthy flags as well as pre-start Event signals.
+            was_cancelled = bool(cancel_event)
+            cancel_event = threading.Event()
+            if was_cancelled:
+                cancel_event.set()
+            CANCEL_FLAGS[stream_id] = cancel_event
 
     def put(event, data):
+        if background_task and event == 'apperror':
+            event = 'error'  # the worker's existing fenced terminal failure event
         # If cancelled, drop all further events except the cancel event itself
         if cancel_event.is_set() and event not in ('cancel', 'error'):
             return
@@ -178,7 +191,9 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
     try:
         s = None
         try:
-            s = get_session(session_id)
+            # Clone before any mutation, including preflight model/workspace
+            # changes. If copying fails, s stays None for exception cleanup.
+            s = copy.deepcopy(get_session(session_id)) if background_task else get_session(session_id)
         except KeyError:
             print(f'[webui] stream error: session not found session_id={session_id!r}', flush=True)
             q.put_nowait(('error', json.dumps({'error': 'Session not found'})))
@@ -489,20 +504,21 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             _agent_sid = getattr(agent, 'session_id', None)
             _compressed = False
             if _agent_sid and _agent_sid != session_id:
-                old_sid = session_id
-                new_sid = _agent_sid
-                # Rename the session file
-                old_path = SESSION_DIR / f'{old_sid}.json'
-                new_path = SESSION_DIR / f'{new_sid}.json'
-                s.session_id = new_sid
-                with LOCK:
-                    if old_sid in SESSIONS:
-                        SESSIONS[new_sid] = SESSIONS.pop(old_sid)
-                if old_path.exists() and not new_path.exists():
-                    try:
-                        old_path.rename(new_path)
-                    except OSError:
-                        logger.debug("Failed to rename session file during compression")
+                if not background_task:
+                    old_sid = session_id
+                    new_sid = _agent_sid
+                    # Only foreground compression changes console session identity.
+                    old_path = SESSION_DIR / f'{old_sid}.json'
+                    new_path = SESSION_DIR / f'{new_sid}.json'
+                    s.session_id = new_sid
+                    with LOCK:
+                        if old_sid in SESSIONS:
+                            SESSIONS[new_sid] = SESSIONS.pop(old_sid)
+                    if old_path.exists() and not new_path.exists():
+                        try:
+                            old_path.rename(new_path)
+                        except OSError:
+                            logger.debug("Failed to rename session file during compression")
                 _compressed = True
             # Also detect compression via the result dict or compressor state
             if not _compressed:
@@ -605,23 +621,24 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         if base_text[:60] in content or content[:60] in msg_text:
                             m['attachments'] = attachments
                             break
-            s.save()
-            # Sync to state.db for /insights (opt-in setting)
-            try:
-                from api.config import load_settings as _load_settings
-                if _load_settings().get('sync_to_insights'):
-                    from api.state_sync import sync_session_usage
-                    sync_session_usage(
-                        session_id=s.session_id,
-                        input_tokens=s.input_tokens or 0,
-                        output_tokens=s.output_tokens or 0,
-                        estimated_cost=s.estimated_cost,
-                        model=model,
-                        title=s.title,
-                        message_count=len(s.messages),
-                    )
-            except Exception:
-                logger.debug("Failed to sync session to insights")
+            if not background_task:
+                s.save()
+                # Sync to state.db for /insights (opt-in setting)
+                try:
+                    from api.config import load_settings as _load_settings
+                    if _load_settings().get('sync_to_insights'):
+                        from api.state_sync import sync_session_usage
+                        sync_session_usage(
+                            session_id=s.session_id,
+                            input_tokens=s.input_tokens or 0,
+                            output_tokens=s.output_tokens or 0,
+                            estimated_cost=s.estimated_cost,
+                            model=model,
+                            title=s.title,
+                            message_count=len(s.messages),
+                        )
+                except Exception:
+                    logger.debug("Failed to sync session to insights")
             usage = {'input_tokens': input_tokens, 'output_tokens': output_tokens, 'estimated_cost': estimated_cost}
             # Include context window data from the agent's compressor for the UI indicator
             _cc = getattr(agent, 'context_compressor', None)
@@ -663,7 +680,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             s.pending_attachments = []
             s.pending_started_at = None
             try:
-                s.save()
+                if not background_task:
+                    s.save()
             except Exception:
                 pass
         err_str = str(e)
