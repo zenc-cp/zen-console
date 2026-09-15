@@ -6,7 +6,8 @@
 - [x] Isolate background producer Session mutations; keep existing claim/CAS ownership and foreground behavior.
 - [x] Deliver one tagged completion pair plus usage only after the winning commit; preserve newer history and pending state.
 - [x] Add 13 portable regression cases, including compression, error/prestart cancellation, insights ordering and a real-thread cancellation barrier. Preserve the original 159-case adoption suite.
-- [ ] Verify the updated CI matrix after separately approved publication.
+- [x] Reproduce the ordinary-bytecode fixture setup failure and scope bytecode/guard restoration to the fixture before setup. Add two lifecycle regressions, for 15 persistence/harness selections, without changing the original 13 test bodies, assertions or deadlines.
+- [ ] Verify the updated CI matrix after separately approved publication. Run [34953866655](https://github.com/zenc-cp/zen-console/actions/runs/34953866655) for 9aaf1d4 passed all three isolated jobs but failed full Python 3.11 during fixture setup; full 3.12/3.13 were cancelled. The fixture correction needs its own matching-head CI evidence.
 - [ ] Exercise an explicitly approved live browser/producer acceptance flow.
 
 These are local code/regression outcomes, not deployment or full-system fencing. External tools/databases, other session writers and post-commit recovery remain outside this slice. Receipt UI adoption and Connector remain deferred.

@@ -92,7 +92,9 @@ def env(tmp_path, monkeypatch, request):
     global ACTIVE_GUARD
     effects, writes, imports, save_events = [], [], {}, []
     state = tmp_path.resolve()
-    ACTIVE_GUARD = state, effects, writes
+    # Do not depend on caller -B, and restore state even if setup never yields.
+    monkeypatch.setattr(sys, 'dont_write_bytecode', True)
+    monkeypatch.setattr(sys.modules[__name__], 'ACTIVE_GUARD', (state, effects, writes))
     probes = []
     for obj, name in ((socket, 'socket'), (socket, 'create_connection'), (subprocess, 'Popen')):
         probe = mock.Mock(side_effect=AssertionError('Network/process effect forbidden'))
@@ -408,3 +410,66 @@ def test_real_thread_cancellation(env, monkeypatch):
     assert e.worker._processed == 0 and e.insights == []
     assert e.session.__dict__ == before_cache
     assert e.session.path.read_bytes() == before_bytes
+
+
+def test_fixture_controls_bytecode_and_restores_caller_state(env, tmp_path, request):
+    global ACTIVE_GUARD
+    env.mode = 'fixture_bytecode_policy'
+    guard_before, bytecode_before = ACTIVE_GUARD, sys.dont_write_bytecode
+    state = tmp_path / 'nested_bytecode'
+    state.mkdir()
+    setup_error, bytecode_inside = None, None
+    try:
+        with pytest.MonkeyPatch.context() as caller:
+            caller.setattr(sys, 'dont_write_bytecode', False)
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setattr(sys.modules[__name__], 'RUN', None)
+                generator = globals()['env'].__wrapped__(state, patch, request)
+                try:
+                    next(generator)
+                    bytecode_inside = sys.dont_write_bytecode
+                except Exception as exc:
+                    setup_error = exc
+                finally:
+                    generator.close()
+            caller_policy_restored = sys.dont_write_bytecode is False
+            guard_restored = ACTIVE_GUARD is guard_before
+    finally:
+        # Contain a failing regression without masking the measured failure.
+        ACTIVE_GUARD = guard_before
+        sys.dont_write_bytecode = bytecode_before
+    assert setup_error is None, repr(setup_error)
+    assert bytecode_inside is True
+    assert caller_policy_restored and guard_restored
+    env.observation.update({'caller_bytecode_restored': caller_policy_restored,
+                            'outer_guard_restored': guard_restored})
+
+
+def test_fixture_restores_guard_after_setup_failure(env, tmp_path, request):
+    global ACTIVE_GUARD
+    env.mode = 'fixture_setup_failure_cleanup'
+    guard_before = ACTIVE_GUARD
+    state = tmp_path / 'nested_setup_failure'
+    state.mkdir()
+    original_mkdir = Path.mkdir
+
+    def fail_setup(path, *args, **kwargs):
+        if path == state / 'sessions':
+            raise RuntimeError('synthetic fixture setup failure')
+        return original_mkdir(path, *args, **kwargs)
+
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(Path, 'mkdir', fail_setup)
+            generator = globals()['env'].__wrapped__(state, patch, request)
+            try:
+                with pytest.raises(RuntimeError, match='synthetic fixture setup failure'):
+                    next(generator)
+            finally:
+                generator.close()
+        guard_restored = ACTIVE_GUARD is guard_before
+    finally:
+        # Preserve outer-test containment even when the regression is red.
+        ACTIVE_GUARD = guard_before
+    assert guard_restored, 'Fixture setup failure leaked its process-global guard'
+    env.observation['outer_guard_restored_after_setup_failure'] = guard_restored

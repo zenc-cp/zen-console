@@ -6,7 +6,9 @@ Background task execution passes `background_task=True` to `_run_agent_streaming
 
 The existing task-row claim and terminal CAS remain authoritative. After a winning completion, the worker appends one tagged task prompt/result pair to the latest session and merges usage, default-title generation and optional insights synchronization. It does not insert the producer's duplicate raw chat turn or overwrite newer history/pending fields with a stale full-session snapshot. Intermediate tool evidence remains in the task tool log. Foreground session persistence/compression are unchanged.
 
-The original 159 adoption cases and 13 additional persistence cases passed locally. The latter execute the actual streaming, model, store, worker and cancellation-route code against fake agent/provider/configuration dependencies; one case coordinates real producer/driver threads. See `TESTING.md` for rerunnable commands and evidence limits.
+The regression corpus retains the 159 adoption cases and 13 persistence behavior cases, plus two fixture-lifecycle cases. The persistence cases execute the actual streaming, model, store, worker and cancellation-route code against fake agent/provider/configuration dependencies; one case coordinates real producer/driver threads. See `TESTING.md` for rerunnable commands and evidence limits.
+
+Test isolation does not depend on caller `-B`: the fixture temporarily disables bytecode writes and registers monkeypatch-managed guard restoration before loading modules or constructing session state. A pre-yield setup failure therefore restores the previous guard instead of contaminating unrelated tests or pytest cleanup. The two added cases check caller bytecode/guard restoration and setup-failure cleanup. This changes the test harness, not the runtime contract above.
 
 This fences the producer's console session mutations, not every agent side effect. External Hermes SessionDB/tools, initial worker session provisioning, other session writers, cross-process JSON atomicity and post-commit delivery recovery are not converted into a transaction or outbox. Publication, live browser acceptance and deployment are separate gates.
 
