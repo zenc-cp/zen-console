@@ -71,10 +71,12 @@ class BackgroundWorker:
                     time.sleep(self._poll_interval)
                     continue
 
-                if not self._store.claim_task(task['task_id']):
+                claim = self._store.claim_execution(task['task_id'])
+                if claim is None:
                     continue  # someone else claimed it
-
-                self._execute_task(task)
+                claimed_task = self._store.get_execution_task(claim)
+                if claimed_task is not None:
+                    self._execute_task(dict(claimed_task, _execution_claim=claim))
             except Exception:
                 # Never let the loop die due to an unexpected exception
                 self._errors += 1
@@ -93,7 +95,10 @@ class BackgroundWorker:
         from api.streaming import _run_agent_streaming, STREAMS, STREAMS_LOCK
 
         task_id = task['task_id']
-        stream_id = f"bg_{task_id}"
+        claim = task.get('_execution_claim')
+        if not self._store.is_current_execution(claim) or claim.task_id != task_id:
+            return
+        stream_id = claim.stream_id
 
         # Task 4: Apply profile before agent run
         _prev_profile = None
@@ -137,6 +142,11 @@ class BackgroundWorker:
     def _run_agent_for_task(self, task: dict, task_id: str, stream_id: str) -> None:
         """Internal: run agent pipeline for a task and capture all events."""
         from api.streaming import _run_agent_streaming, STREAMS, STREAMS_LOCK
+
+        claim = task.get('_execution_claim')
+        if (not self._store.is_current_execution(claim)
+                or claim.task_id != task_id or claim.stream_id != stream_id):
+            return
 
         # Ensure the session exists — background tasks may use a fresh session_id
         from api.models import get_session, new_session
@@ -194,15 +204,21 @@ class BackgroundWorker:
                 try:
                     event, data = q.get(timeout=60)
                 except queue.Empty:
-                    # Heartbeat — update progress to show we're still alive
+                    if not self._store.is_current_execution(claim):
+                        break
+                    # Heartbeat for a still-current execution.
                     self._store.update_progress(task_id, {
                         "tokens": token_count,
                         "status": "waiting",
                     })
                     continue
 
-                # Broadcast event to any live SSE subscribers
-                self._broadcast(task_id, event, data)
+                # Preview events are not terminal success. Terminal publication
+                # is gated by the database commit below.
+                if event not in ('done', 'error', 'cancel'):
+                    if not self._store.is_current_execution(claim):
+                        break
+                    self._broadcast(task_id, event, data)
 
                 if event == 'token':
                     text = data.get('text', '') if isinstance(data, dict) else str(data)
@@ -256,12 +272,13 @@ class BackgroundWorker:
 
                 elif event == 'done':
                     result_text = ''.join(full_text)
-                    self._store.set_result(task_id, result_text, status='completed')
-                    self._processed += 1
-                    # Inject into session message history
-                    self._inject_into_session(task, result_text)
-                    # Fire notification
-                    self._notify(task, result_text)
+                    if self._store.finish_execution(claim, status='completed', result=result_text):
+                        self._processed += 1
+                        self._broadcast(task_id, event, data)
+                        finished_task = self._store.get_execution_task(claim, status='completed')
+                        if finished_task is not None:
+                            self._inject_into_session(finished_task, result_text)
+                            self._notify(finished_task, result_text)
                     break
 
                 elif event in ('error', 'cancel'):
@@ -270,8 +287,9 @@ class BackgroundWorker:
                         if isinstance(data, dict)
                         else str(data)
                     )
-                    self._store.update_status(task_id, 'failed', error=error_msg)
-                    self._errors += 1
+                    if self._store.finish_execution(claim, status='failed', error=error_msg):
+                        self._errors += 1
+                        self._broadcast(task_id, event, data)
                     break
 
         finally:

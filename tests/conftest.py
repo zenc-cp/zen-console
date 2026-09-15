@@ -23,6 +23,10 @@ import urllib.request
 import urllib.error
 import pytest
 
+# These suites require synthetic API dependencies, not this server lifecycle.
+# scripts/verify_task_adoption.py selects them explicitly with --noconftest.
+collect_ignore = ['test_task_fencing.py', 'test_task_result_receipt.py']
+
 # ── Repo root discovery ────────────────────────────────────────────────────
 # conftest.py lives at <repo>/tests/conftest.py
 TESTS_DIR  = pathlib.Path(__file__).parent.resolve()

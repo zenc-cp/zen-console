@@ -1,5 +1,42 @@
 # Hermes Web UI: Browser Testing Plan
 
+## Isolated task-adoption checks (2026-09-14)
+
+**Working-copy evidence, not deployment or browser verification:** 159 selected tests pass, with no skips or deselections. This count covers the four files below, not the historical whole-repository totals later in this document.
+
+Run from the repository with Python 3.11+ and the existing pytest dependency:
+
+```powershell
+python -B scripts/verify_task_adoption.py --artifact-dir "$env:USERPROFILE\.dsh\work\zenops-task-ci-integration"
+```
+
+The runner uses a new retained `test-runs/verify-<uuid>` directory for every invocation. It runs pytest in a fresh child process with `--noconftest`, disabled plugin autoload/cache/bytecode and a unique synthetic `--basetemp`. It writes `verification.json`, `pytest.json`, `stdout.txt` and `stderr.txt`. The report checks actual working-copy import paths, source stability, full selection and test outcomes. When `baseline-inputs.json` is present in the artifact directory, it also enforces the pinned unrelated-file/historical-evidence hashes and approved write set; use a different artifact directory for a deliberately different baseline.
+
+Selected files:
+
+- `tests/test_background_tasks_1_2.py`: 34 existing store/worker tests.
+- `tests/test_background_tasks_3_4.py`: 55 existing route/notification/startup tests.
+- `tests/test_task_fencing.py`: 34 ownership, maintenance, migration and consumer-path selections.
+- `tests/test_task_result_receipt.py`: 36 route/conformance selections, including all six literal golden vectors and 14 instrumented guard cases.
+
+The actual store, worker, routes, sweeper, startup integration, notification helpers and receipt module are imported from this repository. Configuration, sessions, producer and profile dependencies are synthetic. Socket/process guards apply during tests and their fixtures; pytest's Windows platform discovery initializes outside those guards. Native worker threads and separate SQLite connections use only newly created synthetic state. Some notification tests intentionally consume/delete their own synthetic files.
+
+`tests/conftest.py` is intentionally not loaded: its server fixture terminates a port owner, deletes state and starts a server. Do not substitute a repository-wide pytest invocation for this isolated check. The pre-start cancellation regression executes only the bounded initialization fragment from the real streaming source via AST, not the live producer.
+
+The test matrix covers commit-before-publication, cancellation immediately before commit, stale/reclaimed attempts, heartbeat and queued-sweep races, cancellation across two SQLite connections, concurrent terminal contenders, migration failure propagation, unchanged default result payloads and worker result delivery into the receipt route and synthetic session history. A post-commit-failure test explicitly demonstrates the notification-loss window: this is not an exactly-once/outbox implementation.
+
+Not exercised: real agents or credentials, actual HTTP/SSE clients, profile changes, live notification delivery, Linux, multiprocess SQLite or deployment. The older manual browser procedures and global totals below are historical guidance, not evidence that those surfaces were run for this change.
+
+### CI collection boundary (2026-09-15)
+
+`.github/workflows/tests.yml` retains the existing server-suite job and adds a separate `task-adoption` job for Python 3.11, 3.12 and 3.13. Each isolated job has read-only repository permissions, a ten-minute limit and runs `scripts/verify_task_adoption.py`, with artifacts under `${RUNNER_TEMP}/task-adoption`.
+
+The server conftest excludes only `test_task_fencing.py` and `test_task_result_receipt.py` through `collect_ignore`. The isolated runner explicitly selects both with `--noconftest`, so this exclusion does not skip their required cases. The 89 existing task tests remain selected by both jobs. Server discovery, startup and cleanup fixtures are unchanged; their Hermes/runtime prerequisites are not replaced by the isolated job.
+
+Remote CI has not been run for this change. Linux and Python 3.12/3.13 execution remain unverified until a separately approved CI-triggering action. Local syntax/collection checks and the Python 3.11 isolated suite are not evidence that the full server suite passes. The local rerun directory above uses this CI follow-through's baseline; the original integration reports remain immutable historical evidence.
+
+---
+
 > This document is for manual browser testing by you or by a Claude browser agent.
 > It covers user-facing features of the UI through v0.50.21 and later releases.
 > Each section is written as a step-by-step test procedure with expected outcomes.

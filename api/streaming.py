@@ -162,9 +162,15 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
         return
 
     # Sprint 10: create a cancel event for this stream
-    cancel_event = threading.Event()
     with STREAMS_LOCK:
-        CANCEL_FLAGS[stream_id] = cancel_event
+        cancel_event = CANCEL_FLAGS.get(stream_id)
+        if not isinstance(cancel_event, threading.Event):
+            # Preserve legacy truthy flags as well as pre-start Event signals.
+            was_cancelled = bool(cancel_event)
+            cancel_event = threading.Event()
+            if was_cancelled:
+                cancel_event.set()
+            CANCEL_FLAGS[stream_id] = cancel_event
 
     def put(event, data):
         # If cancelled, drop all further events except the cancel event itself

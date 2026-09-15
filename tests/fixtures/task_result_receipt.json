@@ -1,0 +1,332 @@
+{
+  "golden": {
+    "format": "result-snapshot-receipt-v1-normative-vectors",
+    "scope": "Synthetic expected bytes only; no candidate implementation",
+    "domain_tag_hex": "726573756c745f736e617073686f745f726563656970743a763100",
+    "vectors": [
+      {
+        "id": "G01",
+        "source_scope": "synthetic-review",
+        "expected_task_id": "task-001",
+        "result_descriptor": {
+          "text": "PASS"
+        },
+        "snapshot_bytes": 4,
+        "snapshot_sha256": "2f9acb02faa121bb2a3621951f57b4c690655337edee2e5ac350be2b3be88ea8",
+        "snapshot_utf8_hex": "50415353",
+        "canonical_preimage_utf8": "{\"encoding\":\"utf-8\",\"snapshot_bytes\":4,\"snapshot_sha256\":\"2f9acb02faa121bb2a3621951f57b4c690655337edee2e5ac350be2b3be88ea8\",\"source_scope\":\"synthetic-review\",\"task_id\":\"task-001\"}",
+        "receipt_id": "a1054498e9eea2c53bd062dce9f8e48e74030d99962bde7df9496239737a3ce3",
+        "canonical_receipt_utf8": "{\"accepted\":false,\"encoding\":\"utf-8\",\"kind\":\"result_snapshot_receipt\",\"receipt_id\":\"a1054498e9eea2c53bd062dce9f8e48e74030d99962bde7df9496239737a3ce3\",\"schema_version\":1,\"snapshot_bytes\":4,\"snapshot_sha256\":\"2f9acb02faa121bb2a3621951f57b4c690655337edee2e5ac350be2b3be88ea8\",\"source_scope\":\"synthetic-review\",\"task_id\":\"task-001\"}"
+      },
+      {
+        "id": "G02",
+        "source_scope": "synthetic-review",
+        "expected_task_id": "task-001",
+        "result_descriptor": {
+          "text": "PASS\n"
+        },
+        "snapshot_bytes": 5,
+        "snapshot_sha256": "c26de83abdc9496cd1301470918ec39ecca1cf389ef0ae1c6504da1800d1c431",
+        "snapshot_utf8_hex": "504153530a",
+        "canonical_preimage_utf8": "{\"encoding\":\"utf-8\",\"snapshot_bytes\":5,\"snapshot_sha256\":\"c26de83abdc9496cd1301470918ec39ecca1cf389ef0ae1c6504da1800d1c431\",\"source_scope\":\"synthetic-review\",\"task_id\":\"task-001\"}",
+        "receipt_id": "b3406ec5d256458c4e58c3c9766e06a1bac288ba0e72ec5705ac4bf6f91da14d",
+        "canonical_receipt_utf8": "{\"accepted\":false,\"encoding\":\"utf-8\",\"kind\":\"result_snapshot_receipt\",\"receipt_id\":\"b3406ec5d256458c4e58c3c9766e06a1bac288ba0e72ec5705ac4bf6f91da14d\",\"schema_version\":1,\"snapshot_bytes\":5,\"snapshot_sha256\":\"c26de83abdc9496cd1301470918ec39ecca1cf389ef0ae1c6504da1800d1c431\",\"source_scope\":\"synthetic-review\",\"task_id\":\"task-001\"}"
+      },
+      {
+        "id": "G03",
+        "source_scope": "synthetic-review",
+        "expected_task_id": "task-001",
+        "result_descriptor": {
+          "text": "e\u0301 \u6e2c\u8a66 \ud83d\ude80\r\n"
+        },
+        "snapshot_bytes": 17,
+        "snapshot_sha256": "32a659a45ebd7e03e654b1951b1a8926ffd473c76f9371a1258e1893e4d75c1d",
+        "snapshot_utf8_hex": "65cc8120e6b8ace8a9a620f09f9a800d0a",
+        "canonical_preimage_utf8": "{\"encoding\":\"utf-8\",\"snapshot_bytes\":17,\"snapshot_sha256\":\"32a659a45ebd7e03e654b1951b1a8926ffd473c76f9371a1258e1893e4d75c1d\",\"source_scope\":\"synthetic-review\",\"task_id\":\"task-001\"}",
+        "receipt_id": "6a780799ff9e4c79f9c53732d09a8b7621cd1e0b5bb1619892b0dc599516ec93",
+        "canonical_receipt_utf8": "{\"accepted\":false,\"encoding\":\"utf-8\",\"kind\":\"result_snapshot_receipt\",\"receipt_id\":\"6a780799ff9e4c79f9c53732d09a8b7621cd1e0b5bb1619892b0dc599516ec93\",\"schema_version\":1,\"snapshot_bytes\":17,\"snapshot_sha256\":\"32a659a45ebd7e03e654b1951b1a8926ffd473c76f9371a1258e1893e4d75c1d\",\"source_scope\":\"synthetic-review\",\"task_id\":\"task-001\"}"
+      },
+      {
+        "id": "G04",
+        "source_scope": "synthetic-review",
+        "expected_task_id": "task-002",
+        "result_descriptor": {
+          "text": "PASS"
+        },
+        "snapshot_bytes": 4,
+        "snapshot_sha256": "2f9acb02faa121bb2a3621951f57b4c690655337edee2e5ac350be2b3be88ea8",
+        "snapshot_utf8_hex": "50415353",
+        "canonical_preimage_utf8": "{\"encoding\":\"utf-8\",\"snapshot_bytes\":4,\"snapshot_sha256\":\"2f9acb02faa121bb2a3621951f57b4c690655337edee2e5ac350be2b3be88ea8\",\"source_scope\":\"synthetic-review\",\"task_id\":\"task-002\"}",
+        "receipt_id": "a4e572724d6040f30f1903db5391f01b7e161be173c4a402a38f867eb25208b8",
+        "canonical_receipt_utf8": "{\"accepted\":false,\"encoding\":\"utf-8\",\"kind\":\"result_snapshot_receipt\",\"receipt_id\":\"a4e572724d6040f30f1903db5391f01b7e161be173c4a402a38f867eb25208b8\",\"schema_version\":1,\"snapshot_bytes\":4,\"snapshot_sha256\":\"2f9acb02faa121bb2a3621951f57b4c690655337edee2e5ac350be2b3be88ea8\",\"source_scope\":\"synthetic-review\",\"task_id\":\"task-002\"}"
+      },
+      {
+        "id": "G05",
+        "source_scope": "other-synthetic",
+        "expected_task_id": "task-001",
+        "result_descriptor": {
+          "text": "PASS"
+        },
+        "snapshot_bytes": 4,
+        "snapshot_sha256": "2f9acb02faa121bb2a3621951f57b4c690655337edee2e5ac350be2b3be88ea8",
+        "snapshot_utf8_hex": "50415353",
+        "canonical_preimage_utf8": "{\"encoding\":\"utf-8\",\"snapshot_bytes\":4,\"snapshot_sha256\":\"2f9acb02faa121bb2a3621951f57b4c690655337edee2e5ac350be2b3be88ea8\",\"source_scope\":\"other-synthetic\",\"task_id\":\"task-001\"}",
+        "receipt_id": "e95b957ea78929df2b3c6d7832802e14f666650329a9e41365245102466056ef",
+        "canonical_receipt_utf8": "{\"accepted\":false,\"encoding\":\"utf-8\",\"kind\":\"result_snapshot_receipt\",\"receipt_id\":\"e95b957ea78929df2b3c6d7832802e14f666650329a9e41365245102466056ef\",\"schema_version\":1,\"snapshot_bytes\":4,\"snapshot_sha256\":\"2f9acb02faa121bb2a3621951f57b4c690655337edee2e5ac350be2b3be88ea8\",\"source_scope\":\"other-synthetic\",\"task_id\":\"task-001\"}"
+      },
+      {
+        "id": "G06",
+        "source_scope": "synthetic-review",
+        "expected_task_id": "boundary-001",
+        "result_descriptor": {
+          "repeat": {
+            "unit": "x",
+            "count": 65536
+          }
+        },
+        "snapshot_bytes": 65536,
+        "snapshot_sha256": "1f8745f0d2d1387ec1af2211a3cf417b2e9e885e853472649c1d979d0e9370e3",
+        "snapshot_utf8_hex": null,
+        "canonical_preimage_utf8": "{\"encoding\":\"utf-8\",\"snapshot_bytes\":65536,\"snapshot_sha256\":\"1f8745f0d2d1387ec1af2211a3cf417b2e9e885e853472649c1d979d0e9370e3\",\"source_scope\":\"synthetic-review\",\"task_id\":\"boundary-001\"}",
+        "receipt_id": "e9abce923bf759329c9d22b6d513bea5a21eff93d1d4366f122a46cc02630891",
+        "canonical_receipt_utf8": "{\"accepted\":false,\"encoding\":\"utf-8\",\"kind\":\"result_snapshot_receipt\",\"receipt_id\":\"e9abce923bf759329c9d22b6d513bea5a21eff93d1d4366f122a46cc02630891\",\"schema_version\":1,\"snapshot_bytes\":65536,\"snapshot_sha256\":\"1f8745f0d2d1387ec1af2211a3cf417b2e9e885e853472649c1d979d0e9370e3\",\"source_scope\":\"synthetic-review\",\"task_id\":\"boundary-001\"}"
+      }
+    ]
+  },
+  "guards": {
+    "format": "result-snapshot-receipt-v1-future-guard-cases",
+    "scope": "Normative expectations only; candidate guard behavior has not been executed",
+    "case_convention": "A null result_override uses the base vector text; null previous_descriptor means no prior receipt; required error field is the empty string. Build a flat response with task_id from the base vector, chosen status, result and error. Trusted scope/task also come from the base vector. Replace-field descriptors change only the named field without recomputing other values. Duplicate-key descriptors add a second occurrence of that vector field.",
+    "cases": [
+      {
+        "id": "B01",
+        "response_from": "G01",
+        "result_override": {
+          "repeat": {
+            "unit": "x",
+            "count": 65537
+          }
+        },
+        "previous_descriptor": null,
+        "status_override": "completed",
+        "expected_kind": "rejected",
+        "expected_reason": "RESULT_TOO_LARGE",
+        "must_not_call": [
+          "snapshot_utf8_encode",
+          "previous_utf8_decode",
+          "previous_json_parse"
+        ]
+      },
+      {
+        "id": "B02",
+        "response_from": "G01",
+        "result_override": null,
+        "previous_descriptor": {
+          "kind": "bytes_repeat",
+          "ascii": "x",
+          "count": 4097
+        },
+        "status_override": "completed",
+        "expected_kind": "rejected",
+        "expected_reason": "PREVIOUS_TOO_LARGE",
+        "must_not_call": [
+          "snapshot_utf8_encode",
+          "previous_utf8_decode",
+          "previous_json_parse"
+        ]
+      },
+      {
+        "id": "B03",
+        "response_from": "G01",
+        "result_override": {
+          "repeat": {
+            "unit": "\ud83d\ude42",
+            "count": 16385
+          }
+        },
+        "previous_descriptor": null,
+        "status_override": "completed",
+        "expected_kind": "rejected",
+        "expected_reason": "RESULT_TOO_LARGE",
+        "must_not_call": []
+      },
+      {
+        "id": "B04",
+        "response_from": "G01",
+        "result_override": {
+          "text": ""
+        },
+        "previous_descriptor": null,
+        "status_override": "completed",
+        "expected_kind": "rejected",
+        "expected_reason": "EMPTY_RESULT",
+        "must_not_call": [
+          "snapshot_utf8_encode",
+          "previous_utf8_decode",
+          "previous_json_parse"
+        ]
+      },
+      {
+        "id": "B05",
+        "response_from": "G01",
+        "result_override": {
+          "text": "\ud800"
+        },
+        "previous_descriptor": null,
+        "status_override": "completed",
+        "expected_kind": "rejected",
+        "expected_reason": "INVALID_UNICODE",
+        "must_not_call": []
+      },
+      {
+        "id": "B06",
+        "response_from": "G01",
+        "result_override": null,
+        "previous_descriptor": {
+          "kind": "duplicate_key",
+          "vector": "G01",
+          "key": "accepted"
+        },
+        "status_override": "completed",
+        "expected_kind": "rejected",
+        "expected_reason": "INVALID_PREVIOUS",
+        "must_not_call": [
+          "snapshot_utf8_encode"
+        ]
+      },
+      {
+        "id": "B07",
+        "response_from": "G01",
+        "result_override": null,
+        "previous_descriptor": {
+          "kind": "replace_field",
+          "vector": "G01",
+          "field": "schema_version",
+          "value": 0
+        },
+        "status_override": "completed",
+        "expected_kind": "rejected",
+        "expected_reason": "INVALID_PREVIOUS",
+        "must_not_call": [
+          "snapshot_utf8_encode"
+        ]
+      },
+      {
+        "id": "B08",
+        "response_from": "G01",
+        "result_override": null,
+        "previous_descriptor": {
+          "kind": "prefix_ascii",
+          "vector": "G01",
+          "prefix": " "
+        },
+        "status_override": "completed",
+        "expected_kind": "rejected",
+        "expected_reason": "INVALID_PREVIOUS",
+        "must_not_call": [
+          "snapshot_utf8_encode"
+        ]
+      },
+      {
+        "id": "B09",
+        "response_from": "G01",
+        "result_override": null,
+        "previous_descriptor": {
+          "kind": "prefix_hex",
+          "vector": "G01",
+          "hex": "efbbbf"
+        },
+        "status_override": "completed",
+        "expected_kind": "rejected",
+        "expected_reason": "INVALID_PREVIOUS",
+        "must_not_call": [
+          "snapshot_utf8_encode"
+        ]
+      },
+      {
+        "id": "B10",
+        "response_from": "G01",
+        "result_override": null,
+        "previous_descriptor": {
+          "kind": "nested_arrays",
+          "depth": 1100,
+          "inner": 0
+        },
+        "status_override": "completed",
+        "expected_kind": "rejected",
+        "expected_reason": "INVALID_PREVIOUS",
+        "must_not_call": [
+          "snapshot_utf8_encode"
+        ]
+      },
+      {
+        "id": "B11",
+        "response_from": "G01",
+        "result_override": null,
+        "previous_descriptor": {
+          "kind": "vector",
+          "vector": "G05"
+        },
+        "status_override": "completed",
+        "expected_kind": "rejected",
+        "expected_reason": "PREVIOUS_IDENTITY_MISMATCH",
+        "must_not_call": [
+          "snapshot_utf8_encode"
+        ]
+      },
+      {
+        "id": "B12",
+        "response_from": "G01",
+        "result_override": null,
+        "previous_descriptor": {
+          "kind": "replace_field",
+          "vector": "G01",
+          "field": "receipt_id",
+          "value": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "status_override": "completed",
+        "expected_kind": "rejected",
+        "expected_reason": "INVALID_PREVIOUS",
+        "must_not_call": [
+          "snapshot_utf8_encode"
+        ]
+      },
+      {
+        "id": "B13",
+        "response_from": "G01",
+        "result_override": {
+          "repeat": {
+            "unit": "x",
+            "count": 65537
+          }
+        },
+        "previous_descriptor": {
+          "kind": "bytes_repeat",
+          "ascii": "x",
+          "count": 4097
+        },
+        "status_override": "running",
+        "expected_kind": "pending",
+        "expected_reason": "PENDING",
+        "must_not_call": [
+          "snapshot_utf8_encode",
+          "previous_utf8_decode",
+          "previous_json_parse"
+        ]
+      },
+      {
+        "id": "B14",
+        "response_from": "G02",
+        "result_override": null,
+        "previous_descriptor": {
+          "kind": "vector",
+          "vector": "G01"
+        },
+        "status_override": "completed",
+        "expected_kind": "conflict",
+        "expected_reason": "CONTENT_CONFLICT",
+        "must_not_call": []
+      }
+    ]
+  }
+}

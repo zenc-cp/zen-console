@@ -210,11 +210,11 @@ class TestCleanupStaleRunning:
         task = tmp_store.create_task("s", "p", "m", "w")
         tmp_store.claim_task(task["task_id"])
 
-        # Manually backdate started_at to be 31 minutes ago
+        # Fixture-only SQL: both execution age and heartbeat are stale.
         past = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
         tmp_store._execute(
-            "UPDATE tasks SET started_at = ? WHERE task_id = ?",
-            (past, task["task_id"]),
+            "UPDATE tasks SET started_at = ?, updated_at = ? WHERE task_id = ?",
+            (past, past, task["task_id"]),
         )
 
         count = tmp_store.cleanup_stale_running(timeout_minutes=30)

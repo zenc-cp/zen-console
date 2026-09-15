@@ -1,5 +1,20 @@
 # Hermes Web UI: Full Parity Roadmap
 
+## Task-pattern adoption: working copy (2026-09-14)
+
+Implemented in the existing application, rather than another standalone pilot:
+
+- [x] Per-execution claims, conditional terminal commits and attempt-specific stream cleanup.
+- [x] Cancellation, stale sweeps and startup requeue wired to captured-state checks; pre-start cancellation preserved.
+- [x] Optional `receipt=1` on the existing task-result endpoint, with unchanged default responses and no acceptance claim.
+- [x] Scoped repository verification: 159 selected tests pass (89 existing task tests and 70 new selections). Coverage includes receipt goldens/guards, migration, concurrent SQLite terminal contenders and the worker-to-result-route/session path.
+
+**Not deployed.** Commit, push, deployment and live client/producer checks require a separate confirmed operation. OMH/Connector runtime installation, an outbox, external-effect replay guarantees and a late-output archive are not part of this batch. Connector remains deferred. See `ARCHITECTURE.md` and the isolated runner in `TESTING.md` for the actual contract and limits.
+
+The release versions and global test totals in the older roadmap below are historical; they are not fresh full-suite results.
+
+---
+
 > Goal: Full 1:1 parity with the Hermes CLI experience via a clean dark web UI.
 > Everything you can do from the CLI terminal, you can do from this UI.
 >

@@ -1,5 +1,29 @@
 # Hermes Web UI: Developer and Architecture Guide
 
+## Working-copy integration: task fencing and receipts (2026-09-14)
+
+**Implemented locally, not deployed.** The release and global test-count statements below remain historical context, not verification of this change.
+
+- `TaskStore.claim_execution` atomically claims a queued task with an immutable version-1 `ExecutionClaim` and a fresh UUID token. The worker retains that claim and uses an attempt-specific `bg_<task_id>_<token>` stream. Ordinary task dictionaries omit `execution_token`.
+- `finish_execution` requires the matching token and `status='running'`. Only a winning terminal commit permits the worker's terminal broadcast, session-history injection and notification. Completion metadata is reread for that execution, rather than taken from the pre-claim queued task.
+- Cancellation compares the captured status and token before signaling that attempt. Queued cancellation creates no producer flag. Producer startup preserves an already-set cancellation event. Sweeper expiry compares the captured task/status/token/start/create/update fields and cleans only the winning attempt's stream.
+- Startup dispatch-timeout requeue uses a captured-state conditional update and preserves the existing three-requeue limit. Startup stale-running cleanup also checks heartbeat age. The separate atomic absolute-age policy in `_fail_old_tasks` is unchanged.
+- Legacy `set_result` and `update_status` are limited to never-claimed queued rows. `claim_task` remains a boolean compatibility wrapper, but callers that execute work must retain `claim_execution` and use `finish_execution`. Do not pair a boolean claim with an unowned terminal setter. Synthetic fixtures use explicit SQL when backdating a claimed row.
+
+### Existing result consumer
+
+`GET /api/task/result` has an optional `receipt=1` query parameter. Default callers keep their existing payload, and do not invoke the projector. Opt-in adds `receipt` with `kind`, `reason`, `accepted=false`, and `record` (the receipt object when received, otherwise null). The source scope is fixed to `zen-console-task-result`. `record` is transported as a JSON object, not verbatim canonical bytes; serialize it with sorted keys and compact separators before supplying it as `previous` to the pure Python API.
+
+`api/result_receipt.py` is pure standard-library code: exact UTF-8 snapshot hashing, canonical JSON, domain-separated receipt identity and strict prior-receipt validation. Limits are 65,536 result characters, 65,536 snapshot bytes and 4,096 prior-receipt bytes; a valid receipt is at most 436 bytes. The HTTP route neither accepts a prior receipt nor exports a second snapshot. It still returns its existing result field, whose response size is not newly capped.
+
+### Boundaries
+
+This adopts the useful fencing and receipt patterns, not the OMH or Connector runtimes. Receipts prove an observed text snapshot, not correctness, authenticated origin or acceptance. No outbox, exactly-once publication, external-tool idempotency, durable late-output archive or OS security boundary is added. A crash after commit can lose notification, and replay will not repair it. Preview/progress/tool-log writes are not promoted to terminal success; their legacy store APIs are not fully execution-fenced.
+
+See the scoped checks in `TESTING.md`. Real producers, profile switching, actual HTTP/SSE clients, external notification delivery, Linux and multiprocess SQLite remain unverified. Mixed-version workers are not supported by this integration.
+
+---
+
 > This document is the canonical reference for anyone (human or agent) working on the
 > Hermes Web UI. It covers the exact current state of the code, every design decision and
 > quirk discovered during development, and a phased architecture improvement roadmap that
