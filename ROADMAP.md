@@ -9,7 +9,12 @@ Implemented in the existing application, rather than another standalone pilot:
 - [x] Optional `receipt=1` on the existing task-result endpoint, with unchanged default responses and no acceptance claim.
 - [x] Scoped repository verification: 159 selected tests pass (89 existing task tests and 70 new selections). Coverage includes receipt goldens/guards, migration, concurrent SQLite terminal contenders and the worker-to-result-route/session path.
 
-**Not deployed.** Commit, push, deployment and live client/producer checks require a separate confirmed operation. OMH/Connector runtime installation, an outbox, external-effect replay guarantees and a late-output archive are not part of this batch. Connector remains deferred. See `ARCHITECTURE.md` and the isolated runner in `TESTING.md` for the actual contract and limits.
+**Published as draft PR [#7](https://github.com/zenc-cp/zen-console/pull/7), not deployed.** Its initial CI run passed the 159-case isolated suite on Python 3.11, 3.12 and 3.13 but exposed three worker-test setup failures and one static script-order assertion in the full suite.
+
+- [x] Local CI repair: isolate worker-test session persistence/cache and restore the existing UI-before-workspace HTML contract. Preserve all 159 adoption cases and the original assertions/deadlines; add worker error-counter checks.
+- Full-suite success for a repair head must be checked against that head's PR checks, not inferred from local or earlier isolated results.
+
+Further commit, push, deployment and live client/producer operations require separate confirmation. OMH/Connector runtime installation, an outbox, external-effect replay guarantees and a late-output archive are not part of this batch. Connector remains deferred. See `ARCHITECTURE.md` and `TESTING.md` for the actual contract and limits.
 
 The release versions and global test totals in the older roadmap below are historical; they are not fresh full-suite results.
 

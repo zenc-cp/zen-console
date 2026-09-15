@@ -20,7 +20,11 @@
 
 This adopts the useful fencing and receipt patterns, not the OMH or Connector runtimes. Receipts prove an observed text snapshot, not correctness, authenticated origin or acceptance. No outbox, exactly-once publication, external-tool idempotency, durable late-output archive or OS security boundary is added. A crash after commit can lose notification, and replay will not repair it. Preview/progress/tool-log writes are not promoted to terminal success; their legacy store APIs are not fully execution-fenced.
 
-See the scoped checks in `TESTING.md`. Real producers, profile switching, actual HTTP/SSE clients, external notification delivery, Linux and multiprocess SQLite remain unverified. Mixed-version workers are not supported by this integration.
+See the scoped checks in `TESTING.md`. The isolated adoption suite passed on Linux with Python 3.11, 3.12 and 3.13 in CI run 34924820271. Real producers, profile switching, live HTTP/SSE adoption flows, external notification delivery and multiprocess SQLite remain unverified. Mixed-version workers are not supported by this integration.
+
+### CI repair boundary
+
+Worker unit tests execute the session model in the pytest process, not the server subprocess. Their class-scoped fixture now creates per-test session storage and gives `api.config` and `api.models` the same temporary session directory, index and session cache. This removes dependence on initialized user/runtime state without changing the worker, its execution claims or terminal fencing. `static/index.html` restores UI-before-workspace script order to match the existing regression contract; both are loaded before their consumers. This is a test-isolation and static-load-order repair, not a runtime redesign or deployment.
 
 ---
 

@@ -7,7 +7,7 @@
 Run from the repository with Python 3.11+ and the existing pytest dependency:
 
 ```powershell
-python -B scripts/verify_task_adoption.py --artifact-dir "$env:USERPROFILE\.dsh\work\zenops-task-ci-integration"
+python -B scripts/verify_task_adoption.py --artifact-dir "$env:USERPROFILE\.dsh\work\zenops-ci-repair\adoption-check"
 ```
 
 The runner uses a new retained `test-runs/verify-<uuid>` directory for every invocation. It runs pytest in a fresh child process with `--noconftest`, disabled plugin autoload/cache/bytecode and a unique synthetic `--basetemp`. It writes `verification.json`, `pytest.json`, `stdout.txt` and `stderr.txt`. The report checks actual working-copy import paths, source stability, full selection and test outcomes. When `baseline-inputs.json` is present in the artifact directory, it also enforces the pinned unrelated-file/historical-evidence hashes and approved write set; use a different artifact directory for a deliberately different baseline.
@@ -25,7 +25,7 @@ The actual store, worker, routes, sweeper, startup integration, notification hel
 
 The test matrix covers commit-before-publication, cancellation immediately before commit, stale/reclaimed attempts, heartbeat and queued-sweep races, cancellation across two SQLite connections, concurrent terminal contenders, migration failure propagation, unchanged default result payloads and worker result delivery into the receipt route and synthetic session history. A post-commit-failure test explicitly demonstrates the notification-loss window: this is not an exactly-once/outbox implementation.
 
-Not exercised: real agents or credentials, actual HTTP/SSE clients, profile changes, live notification delivery, Linux, multiprocess SQLite or deployment. The older manual browser procedures and global totals below are historical guidance, not evidence that those surfaces were run for this change.
+Not exercised by the isolated suite: real agents or credentials, actual HTTP/SSE clients, profile changes, live notification delivery, multiprocess SQLite or deployment. Linux isolated-matrix evidence is recorded below. The older manual browser procedures and global totals remain historical guidance, not evidence that those live surfaces were run for this change.
 
 ### CI collection boundary (2026-09-15)
 
@@ -33,7 +33,15 @@ Not exercised: real agents or credentials, actual HTTP/SSE clients, profile chan
 
 The server conftest excludes only `test_task_fencing.py` and `test_task_result_receipt.py` through `collect_ignore`. The isolated runner explicitly selects both with `--noconftest`, so this exclusion does not skip their required cases. The 89 existing task tests remain selected by both jobs. Server discovery, startup and cleanup fixtures are unchanged; their Hermes/runtime prerequisites are not replaced by the isolated job.
 
-Remote CI has not been run for this change. Linux and Python 3.12/3.13 execution remain unverified until a separately approved CI-triggering action. Local syntax/collection checks and the Python 3.11 isolated suite are not evidence that the full server suite passes. The local rerun directory above uses this CI follow-through's baseline; the original integration reports remain immutable historical evidence.
+Initial publication CI run [34924820271](https://github.com/zenc-cp/zen-console/actions/runs/34924820271), for `afe92bf`, passed all 159 isolated cases on Linux/Python 3.11, 3.12 and 3.13. The full Python 3.12 suite reported 4 failed, 1277 passed and 52 skipped; the other two full-suite jobs were cancelled. The failures were three `TestWorkerProcessesTask` completion/error cases and `test_module_load_order_correct`. This is baseline evidence, not a green full-suite claim for a subsequent repair.
+
+### CI repair validation
+
+The worker tests now initialize per-test session storage, index and a shared `OrderedDict` for the config/model aliases. A separate controlled probe using the real session model reproduced the three original failures when storage was absent; creating only that directory made the unchanged cases pass. The fixture removes this test-process dependency without changing production session or worker code. Additional error-counter assertions expect zero for completion and one for the deliberately injected agent error.
+
+The HTML swaps only the UI/workspace script tags to satisfy the existing order assertion, which remains unchanged. Pre-publication candidate checks passed the three real-session worker cases, all 159 isolated adoption cases and the original UI assertion against static HTML. An offline Node VM check evaluated the unchanged UI/workspace scripts in both orders at root and prefixed paths: four initialization checks passed using synthetic DOM/storage/fetch. This is not browser E2E or live HTTP verification.
+
+No timeout increase, test exclusion, added skip or workflow change is part of this repair. Verify all six jobs against the repair head's PR checks after an approved publication; local results and the initial CI run do not establish that outcome. Prior integration reports remain immutable historical evidence.
 
 ---
 
