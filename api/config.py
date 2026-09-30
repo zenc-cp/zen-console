@@ -672,6 +672,9 @@ def resolve_model_provider(model_id: str) -> tuple:
     return model_id, config_provider, config_base_url
 
 
+from api.model_catalog import configured_copilot_catalog
+
+
 def get_available_models() -> dict:
     """
     Return available models grouped by provider.
@@ -688,6 +691,10 @@ def get_available_models() -> dict:
         'groups': [{'provider': str, 'models': [{'id': str, 'label': str}]}]
     }
     """
+    aligned = configured_copilot_catalog(cfg, DEFAULT_MODEL)
+    if aligned is not None:
+        return aligned
+
     active_provider = None
     default_model = DEFAULT_MODEL
     groups = []
@@ -1278,6 +1285,12 @@ if SETTINGS_FILE.exists():
             )
         except Exception:
             pass
+
+# Explicit native Copilot configuration is authoritative for new-session
+# startup defaults. Do not rewrite saved settings or retarget existing sessions.
+_aligned_startup_catalog = configured_copilot_catalog(cfg, DEFAULT_MODEL)
+if _aligned_startup_catalog is not None:
+    DEFAULT_MODEL = _aligned_startup_catalog["default_model"]
 
 # ── SESSIONS in-memory cache (LRU OrderedDict) ───────────────────────────────
 SESSIONS: collections.OrderedDict = collections.OrderedDict()

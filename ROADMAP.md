@@ -1,5 +1,11 @@
 # Hermes Web UI: Full Parity Roadmap
 
+## Staged native Copilot catalog alignment
+
+Explicit native `copilot` configuration now reports its own provider/catalog and configured startup default, instead of labelling a managed catalog OpenRouter or inheriting a stale saved model. The pure adapter preserves catalog order, flags unavailable IDs, and rejects unsafe/duplicate IDs or unavailable defaults. Saved settings and existing sessions are not rewritten. Other provider discovery and authentication behavior remains unchanged.
+
+Validation: four isolated selector/startup tests pass. Production rollout and browser verification remain pending; the historic suite counts below are not a claim that the full suite was rerun for this change.
+
 > Goal: Full 1:1 parity with the Hermes CLI experience via a clean dark web UI.
 > Everything you can do from the CLI terminal, you can do from this UI.
 >

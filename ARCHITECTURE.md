@@ -1,5 +1,11 @@
 # Hermes Web UI: Developer and Architecture Guide
 
+## Native Copilot explicit-catalog adapter (staged)
+
+`api/model_catalog.py` is a pure, read-only boundary: `configured_copilot_catalog(config, fallback_default)` returns the native group/default only for explicit `copilot` plus a nonempty configured catalog. Non-Copilot cases return `None` and retain existing discovery. Bare model IDs must be safe and unique; the default must belong to the catalog and not be marked unavailable. Optional `dsh_model_alignment.unavailable_model_ids` supplies availability labels; catalog listing is not entitlement or inference proof.
+
+`api/config.py` uses that boundary in `get_available_models()` and to initialize new-session defaults after saved settings load. No credential discovery policy is weakened, saved preferences are not rewritten, and existing sessions are not retargeted. The catalog should be populated in each managed profile so activation does not expand discovery beyond the agreed list. Live rollout is not yet verified.
+
 > This document is the canonical reference for anyone (human or agent) working on the
 > Hermes Web UI. It covers the exact current state of the code, every design decision and
 > quirk discovered during development, and a phased architecture improvement roadmap that

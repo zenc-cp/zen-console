@@ -1,5 +1,11 @@
 # Hermes Web UI: Browser Testing Plan
 
+## Native Copilot alignment: scoped regression checks
+
+Run from this repository: `python -m pytest tests/test_dsh_catalog_selection.py --noconftest -q -p no:cacheprovider`. Four tests pass: native provider/default/availability reporting, unchanged explicit OpenRouter behavior, startup default overriding a stale saved model without rewriting settings, and rejection of unsafe/duplicate IDs or missing/disabled defaults. The startup test imports configuration only in a child process with synthetic HOME/state/workspace; it does not launch a server.
+
+After separately approved deployment: refresh the existing Console, verify the native Copilot group and configured default, confirm the full agreed catalog and unavailable picker label, and verify a new session uses the configured default. Preserve existing sessions. Browser behavior, live authentication/inference and the full repository suite remain unverified by these isolated tests; historic counts below are unchanged baseline documentation.
+
 > This document is for manual browser testing by you or by a Claude browser agent.
 > It covers user-facing features of the UI through v0.50.21 and later releases.
 > Each section is written as a step-by-step test procedure with expected outcomes.
