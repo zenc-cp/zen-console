@@ -20,6 +20,7 @@ import traceback
 import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from api.model_catalog import configured_copilot_catalog
 
 # ── Basic layout ──────────────────────────────────────────────────────────────
 HOME = Path.home()
@@ -670,9 +671,6 @@ def resolve_model_provider(model_id: str) -> tuple:
             return model_id, "openrouter", None
 
     return model_id, config_provider, config_base_url
-
-
-from api.model_catalog import configured_copilot_catalog
 
 
 def get_available_models() -> dict:
