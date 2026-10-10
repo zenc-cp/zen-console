@@ -1,5 +1,13 @@
 # Hermes Web UI: Browser Testing Plan
 
+## 2026-10-10: CI compatibility follow-up
+
+Published repair `0acd7d73805ed1552c8daf9f7cc3e2862260847b`, workflow run `38033610590`, Python 3.11: five failures, 1,304 passes, 52 skips and exit 1. The two other matrix jobs were cancelled. Historical baseline logs are unavailable (410 Gone); do not infer their exact failure set.
+
+A one-variable local reproduction using the actual store, worker and session model reproduced the `running` result when test-owned session storage was absent, before the producer queue existed. Initialising only that storage passed all 34 original legacy tests. The corrected class-scoped fixture also passed all 34 with outer storage still absent. The cancellation class now checks a set Event rather than boolean identity; all four tests passed. The exact script-order assertion passed against local HTML bytes after moving UI before workspace. No test is skipped or removed by these corrections.
+
+These focused reproductions use synthetic configuration/stream ports without global server fixtures, SDK/account/profile imports or network. The local HTML assertion is not an HTTP/browser test. CI must rerun on the approved follow-up commit; its result remains unknown. The four lifecycle source-file hashes are unchanged.
+
 ## 2026-10-10: isolated lifecycle candidate scope
 
 Run only `tests/isolated_lifecycle/` with the existing pytest dependency. Disable plugin autoload, bytecode and cache; use `--noconftest` so the global server fixture cannot start or import actual SDK/account state. Use synthetic HOME/state/temp and a fresh output directory. This recipe exercises the four actual candidate source files, in-memory/file-backed SQLite fixtures, synthetic producers, task cancellation and subscribers. AST isolation executes the selected stream-function bodies without module-level production imports.

@@ -328,6 +328,21 @@ class TestWorkerLifecycle:
 
 
 class TestWorkerProcessesTask:
+    @pytest.fixture(autouse=True)
+    def isolated_worker_sessions(self, tmp_path, monkeypatch):
+        """Worker threads share this test process, not the server subprocess state."""
+        import collections
+        import api.config as cfg
+        import api.models as models
+
+        session_dir = tmp_path / "sessions"
+        session_dir.mkdir()
+        sessions = collections.OrderedDict()
+        for module in (cfg, models):
+            monkeypatch.setattr(module, "SESSION_DIR", session_dir)
+            monkeypatch.setattr(module, "SESSION_INDEX_FILE", session_dir / "_index.json")
+            monkeypatch.setattr(module, "SESSIONS", sessions)
+
     def test_worker_processes_queued_task(self, tmp_store):
         """Worker picks up queued task → status becomes running (and eventually completed)."""
         from api.task_worker import BackgroundWorker

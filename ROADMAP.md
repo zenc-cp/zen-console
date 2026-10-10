@@ -1,12 +1,22 @@
 # Hermes Web UI: Full Parity Roadmap
 
-## 2026-10-10: focused cancellation/result repair (private, uncommitted)
+## 2026-10-10: CI compatibility follow-up (private, uncommitted)
+
+- [x] Observe published repair CI failure: Python 3.11 reported five failures, 1,304 passes and 52 skips. No green CI claim.
+- [x] Reproduce missing test-process session storage before producer dispatch; initialise only that synthetic storage and preserve the actual session model.
+- [x] Correct the worker-test fixture, require the existing set-Event cancellation contract, and restore the established UI-before-workspace script order. No lifecycle source change.
+- [x] Focused follow-up checks: 34 legacy unit tests passed with absent outer storage; all four cancellation tests and the exact local script-order assertion passed.
+- [ ] Commit and publish the six-file compatibility follow-up only after exact approval; inspect its actual CI result before any release proposal.
+- [ ] Resolve a narrowly scoped repository-based deployment path. The existing stack workflow's console dispatch also enables unrelated stack deployment, so do not call it console-only.
+
+## 2026-10-10: focused cancellation/result repair (published, not deployed)
 
 - [x] Reproduce silent producer exit, late completion after cancellation and ignored application errors against the unchanged `9497211` baseline using synthetic ports.
 - [x] Prepare the smallest existing-code lifecycle correction: atomic terminal writes, cooperative cancel forwarding, preserved preflight cancellation, correct task SSE errors, fresh completion metadata, and retained serial producer ownership.
 - [x] Private staging verification: 28 focused contracts plus four candidate replay cases passed; normal completion control passed on both variants. This is not a live repair.
 - [x] Verify the clean private release-tree copy and relocated tests: 28 passed, zero failures/errors/skips, with the original four candidate source hashes preserved and the diff whitespace check passing.
-- [ ] Obtain separate exact approval for commit, remote publication and canonical deployment. No automatic release or seven-commit promotion.
+- [x] Obtain and consume separate approval for the initial local commit and single-commit publication: `0acd7d73805ed1552c8daf9f7cc3e2862260847b`. This is not deployment.
+- [ ] Obtain a separate exact release approval after verification; no automatic deployment or seven-commit promotion.
 - [ ] Verify actual SDK/model/cancellation/profile/billing behavior after an approved release; unknown costs remain unknown. Customer transport, funded order and payment remain separate business gates.
 
 Historical shipped features and test totals below remain unchanged and are not evidence for this candidate.

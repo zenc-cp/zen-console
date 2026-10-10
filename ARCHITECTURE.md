@@ -1,6 +1,12 @@
 # Hermes Web UI: Developer and Architecture Guide
 
-## 2026-10-10: focused legacy task lifecycle candidate (not deployed)
+## 2026-10-10: CI compatibility follow-up (private, not deployed)
+
+The lifecycle repair was published as `0acd7d73805ed1552c8daf9f7cc3e2862260847b`. Its Python 3.11 CI job failed with five failures, 1,304 passes and 52 skips. A local reproduction traced the worker-test failures to missing session storage in the pytest process before producer dispatch. The follow-up fixture supplies test-owned session paths, index and cache to both configuration and the actual session model. The cancellation assertion now requires a set `threading.Event`, matching the existing stream protocol, rather than the obsolete boolean expectation. The HTML restores UI-before-workspace script order required by the existing regression test; no JavaScript module is changed.
+
+All four lifecycle source files remain byte-identical to the published repair. Local focused results are not full CI, production deployment, SDK/provider termination, profile restoration or billing evidence. Publication and deployment of this follow-up require separate approvals.
+
+## 2026-10-10: focused legacy task lifecycle repair (published, not deployed)
 
 This candidate is rooted at `9497211fb7e58b45ae3bffb7ca8118b2559973a4`, not the seven-commit task-adoption branch. `TaskStore.set_result_if_running` commits terminal metadata only from `running`; its boolean gates worker completion publication. The worker detects producer exit without a terminal event, persists streaming application errors as failures, uses committed metadata in session history, and preserves stopping-worker/producer ownership through cleanup. Accepted task cancellation calls the existing cooperative `cancel_stream` helper after the database state change; the producer retains a pre-start cancellation flag.
 

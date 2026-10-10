@@ -211,7 +211,9 @@ class TestHandleTaskCancel:
         body = {'task_id': task['task_id']}
         handle_task_cancel(handler, body)
         stream_id = f"bg_{task['task_id']}"
-        assert cfg.CANCEL_FLAGS.get(stream_id) is True
+        flag = cfg.CANCEL_FLAGS.get(stream_id)
+        assert isinstance(flag, threading.Event)
+        assert flag.is_set()
 
 
 class TestHandleTaskRetry:
