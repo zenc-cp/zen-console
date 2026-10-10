@@ -1,5 +1,13 @@
 # Hermes Web UI: Developer and Architecture Guide
 
+## 2026-10-10: focused legacy task lifecycle candidate (not deployed)
+
+This candidate is rooted at `9497211fb7e58b45ae3bffb7ca8118b2559973a4`, not the seven-commit task-adoption branch. `TaskStore.set_result_if_running` commits terminal metadata only from `running`; its boolean gates worker completion publication. The worker detects producer exit without a terminal event, persists streaming application errors as failures, uses committed metadata in session history, and preserves stopping-worker/producer ownership through cleanup. Accepted task cancellation calls the existing cooperative `cancel_stream` helper after the database state change; the producer retains a pre-start cancellation flag.
+
+Cancellation acknowledgement, interrupt attempt and SSE closure do not prove model/provider termination or billing stop. An uncooperative producer deliberately keeps the serial worker occupied; no hard-kill promise, new runtime, schema migration or dependency is introduced. Nonterminal state-read/publication races are not full attempt fencing. Legacy profile-activation behavior is unchanged. Actual SDK, active-profile restoration, live runtime, buyer acceptance and payment are separate gates.
+
+The isolated tests use synthetic producers and selected public stream functions without SDK imports. See `TESTING.md` for the exact source-tree verifier. Older global coverage/deployment claims below are historical context, not this candidate's certification.
+
 > This document is the canonical reference for anyone (human or agent) working on the
 > Hermes Web UI. It covers the exact current state of the code, every design decision and
 > quirk discovered during development, and a phased architecture improvement roadmap that

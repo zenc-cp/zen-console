@@ -46,7 +46,7 @@ class BackgroundWorker:
 
     def start(self) -> None:
         """Spawn daemon thread running _loop(). Idempotent."""
-        if self._running and self._thread is not None and self._thread.is_alive():
+        if self._thread is not None and self._thread.is_alive():
             return
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True, name="bg-worker")
@@ -57,7 +57,8 @@ class BackgroundWorker:
         self._running = False
         if self._thread is not None:
             self._thread.join(timeout=10)
-            self._thread = None
+            if not self._thread.is_alive():
+                self._thread = None
 
     # ── main loop ─────────────────────────────────────────────────────────────
 
@@ -194,6 +195,17 @@ class BackgroundWorker:
                 try:
                     event, data = q.get(timeout=60)
                 except queue.Empty:
+                    # A producer that exited without a terminal event cannot
+                    # supply more data. Fail explicitly instead of heartbeating
+                    # forever; this does not terminate a still-live producer.
+                    if not agent_thread.is_alive():
+                        error_msg = 'Producer exited without a terminal event'
+                        if self._store.set_result_if_running(
+                            task_id, ''.join(full_text), status='failed', error=error_msg,
+                        ):
+                            self._errors += 1
+                            self._broadcast(task_id, 'error', {'message': error_msg})
+                        break
                     # Heartbeat — update progress to show we're still alive
                     self._store.update_progress(task_id, {
                         "tokens": token_count,
@@ -201,8 +213,21 @@ class BackgroundWorker:
                     })
                     continue
 
-                # Broadcast event to any live SSE subscribers
-                self._broadcast(task_id, event, data)
+                # A task-state cancellation fences late events even if the
+                # producer has not honoured its cooperative cancellation flag.
+                # This read suppresses already-cancelled nonterminal events;
+                # terminal publication additionally needs the atomic commit.
+                current_task = self._store.get_task(task_id)
+                if current_task is None or current_task['status'] != 'running':
+                    if current_task and current_task['status'] == 'cancelled':
+                        # Close subscribers, but never call this producer-stop
+                        # evidence. Keep the serial worker owning the producer
+                        # until it exits before restoring a shared profile or
+                        # dispatching another task.
+                        self._broadcast(task_id, 'cancel', {'message': 'Task was cancelled'})
+                    break
+                if event not in ('done', 'error', 'apperror', 'cancel'):
+                    self._broadcast(task_id, event, data)
 
                 if event == 'token':
                     text = data.get('text', '') if isinstance(data, dict) else str(data)
@@ -256,26 +281,49 @@ class BackgroundWorker:
 
                 elif event == 'done':
                     result_text = ''.join(full_text)
-                    self._store.set_result(task_id, result_text, status='completed')
-                    self._processed += 1
-                    # Inject into session message history
-                    self._inject_into_session(task, result_text)
-                    # Fire notification
-                    self._notify(task, result_text)
+                    if self._store.set_result_if_running(task_id, result_text, status='completed'):
+                        self._processed += 1
+                        self._broadcast(task_id, event, data)
+                        # Publish only the fresh committed terminal metadata,
+                        # not the queued snapshot selected before claim.
+                        completed_task = self._store.get_task(task_id)
+                        if completed_task and completed_task['status'] == 'completed':
+                            self._inject_into_session(completed_task, result_text)
+                            self._notify(completed_task, result_text)
+                    else:
+                        terminal_task = self._store.get_task(task_id)
+                        if terminal_task and terminal_task['status'] == 'cancelled':
+                            self._broadcast(task_id, 'cancel', {'message': 'Task was cancelled'})
                     break
 
-                elif event in ('error', 'cancel'):
+                elif event in ('error', 'apperror', 'cancel'):
                     error_msg = (
                         data.get('message', str(data))
                         if isinstance(data, dict)
                         else str(data)
                     )
-                    self._store.update_status(task_id, 'failed', error=error_msg)
-                    self._errors += 1
+                    terminal_status = 'cancelled' if event == 'cancel' else 'failed'
+                    if self._store.set_result_if_running(
+                        task_id, ''.join(full_text), status=terminal_status, error=error_msg,
+                    ):
+                        if event != 'cancel':
+                            self._errors += 1
+                        # Task SSE consumers close on error, not chat apperror.
+                        public_event = 'error' if event == 'apperror' else event
+                        self._broadcast(task_id, public_event, data)
+                    else:
+                        terminal_task = self._store.get_task(task_id)
+                        if terminal_task and terminal_task['status'] == 'cancelled':
+                            self._broadcast(task_id, 'cancel', {'message': 'Task was cancelled'})
                     break
 
         finally:
-            # Always clean up the stream slot
+            # A terminal event/cancel acknowledgement is not producer exit.
+            # Keep this serial owner until producer cleanup finishes; do not
+            # restore a shared profile or dispatch another task prematurely.
+            # If interrupt is ineffective, remaining occupied is intentional,
+            # not a false claim of successful termination or billing stop.
+            agent_thread.join()
             with STREAMS_LOCK:
                 STREAMS.pop(stream_id, None)
 
@@ -371,7 +419,7 @@ class BackgroundWorker:
     # ── status ────────────────────────────────────────────────────────────────
 
     def is_running(self) -> bool:
-        return self._running and self._thread is not None and self._thread.is_alive()
+        return self._thread is not None and self._thread.is_alive()
 
     def status(self) -> dict:
         return {

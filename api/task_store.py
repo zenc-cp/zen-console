@@ -211,6 +211,28 @@ class TaskStore:
         )
         return cur.rowcount > 0
 
+    def set_result_if_running(
+        self, task_id: str, result: str, status: str = 'completed', error: str = '',
+    ) -> bool:
+        """Commit a worker terminal result only while its task is still running.
+
+        The returned bool is authority for completion publication. A preceding
+        successful cancellation or stale-task failure cannot be overwritten.
+        This is a task-state fence, not producer termination or billing proof.
+        """
+        if status not in ('completed', 'failed', 'cancelled'):
+            raise ValueError('Expected a terminal task status')
+        completed_at = _utcnow()
+        cur = self._execute(
+            "UPDATE tasks SET result = ?, status = ?, error = ?, "
+            "completed_at = ?, updated_at = ?, "
+            "cancelled_at = CASE WHEN ? = 'cancelled' THEN ? ELSE cancelled_at END "
+            "WHERE task_id = ? AND status = 'running'",
+            (result, status, error, completed_at, completed_at,
+             status, completed_at, task_id),
+        )
+        return cur.rowcount > 0
+
     def cancel_task(self, task_id: str) -> bool:
         """Cancel only if queued or running. Returns True if cancelled."""
         cancelled_at = _utcnow()

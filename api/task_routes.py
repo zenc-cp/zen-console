@@ -75,19 +75,27 @@ def handle_task_cancel(handler, body) -> True:
 
     task_id = body['task_id']
 
-    # Also set the cancel flag if the task has an active stream
-    stream_id = f"bg_{task_id}"
-    try:
-        import threading
-        from api.config import CANCEL_FLAGS, STREAMS_LOCK
-        with STREAMS_LOCK:
-            if stream_id not in CANCEL_FLAGS or not isinstance(CANCEL_FLAGS.get(stream_id), threading.Event):
-                CANCEL_FLAGS[stream_id] = threading.Event()
-            CANCEL_FLAGS[stream_id].set()
-    except Exception:
-        pass
-
     cancelled = get_task_store().cancel_task(task_id)
+    if cancelled:
+        # Do not mutate a stream when cancellation lost to completion.
+        stream_id = f"bg_{task_id}"
+        try:
+            import threading
+            from api.config import CANCEL_FLAGS, STREAMS_LOCK
+            with STREAMS_LOCK:
+                if not isinstance(CANCEL_FLAGS.get(stream_id), threading.Event):
+                    CANCEL_FLAGS[stream_id] = threading.Event()
+                CANCEL_FLAGS[stream_id].set()
+        except Exception:
+            log.warning('Task %s: cancellation committed but flag signal failed', task_id[:12])
+        # Reuse the existing cooperative interrupt + queue-wakeup path only
+        # after the task-state cancellation won. This is a signal, not proof
+        # of producer termination or provider billing stop.
+        try:
+            from api.streaming import cancel_stream
+            cancel_stream(stream_id)
+        except Exception:
+            log.warning('Task %s: cancellation committed but stream signal failed', task_id[:12])
     j(handler, {'ok': True, 'cancelled': cancelled})
     return True
 

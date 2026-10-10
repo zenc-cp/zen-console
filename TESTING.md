@@ -1,5 +1,19 @@
 # Hermes Web UI: Browser Testing Plan
 
+## 2026-10-10: isolated lifecycle candidate scope
+
+Run only `tests/isolated_lifecycle/` with the existing pytest dependency. Disable plugin autoload, bytecode and cache; use `--noconftest` so the global server fixture cannot start or import actual SDK/account state. Use synthetic HOME/state/temp and a fresh output directory. This recipe exercises the four actual candidate source files, in-memory/file-backed SQLite fixtures, synthetic producers, task cancellation and subscribers. AST isolation executes the selected stream-function bodies without module-level production imports.
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
+$env:PYTHONDONTWRITEBYTECODE='1'
+python -B -m pytest tests/isolated_lifecycle/ --noconftest -p no:cacheprovider -q
+```
+
+Private staging: 28 passed, zero failures/errors/skips; same-source baseline replay remains red and corrected four-case replay is green. The relocated clean release-tree copy also passed all 28 tests with zero failures/errors/skips; all four source hashes match the private staging candidate. The diff whitespace check passed. These are local results, not deployment or live-provider evidence. Tests include rejected-terminal no-write controls, cancellation/completion races, application errors, preflight cancellation, synthetic interruption failure, retained ownership of a still-live producer, nonduplicated worker restart and committed history metadata.
+
+No live HTTP/browser/SSE client, model/provider/tool, real profile or production database is exercised. Subscriber queues and interrupt stubs are not billing-stop or actual producer-termination proof. The first control-fixture crash was due to SQLite being closed before all tracked worker threads were joined; corrected fixture teardown is part of the retained tests. Do not count the failed run as passing or use the historical global/manual procedures below as certification of this change.
+
 > This document is for manual browser testing by you or by a Claude browser agent.
 > It covers user-facing features of the UI through v0.50.21 and later releases.
 > Each section is written as a step-by-step test procedure with expected outcomes.

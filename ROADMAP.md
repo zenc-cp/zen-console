@@ -1,5 +1,16 @@
 # Hermes Web UI: Full Parity Roadmap
 
+## 2026-10-10: focused cancellation/result repair (private, uncommitted)
+
+- [x] Reproduce silent producer exit, late completion after cancellation and ignored application errors against the unchanged `9497211` baseline using synthetic ports.
+- [x] Prepare the smallest existing-code lifecycle correction: atomic terminal writes, cooperative cancel forwarding, preserved preflight cancellation, correct task SSE errors, fresh completion metadata, and retained serial producer ownership.
+- [x] Private staging verification: 28 focused contracts plus four candidate replay cases passed; normal completion control passed on both variants. This is not a live repair.
+- [x] Verify the clean private release-tree copy and relocated tests: 28 passed, zero failures/errors/skips, with the original four candidate source hashes preserved and the diff whitespace check passing.
+- [ ] Obtain separate exact approval for commit, remote publication and canonical deployment. No automatic release or seven-commit promotion.
+- [ ] Verify actual SDK/model/cancellation/profile/billing behavior after an approved release; unknown costs remain unknown. Customer transport, funded order and payment remain separate business gates.
+
+Historical shipped features and test totals below remain unchanged and are not evidence for this candidate.
+
 > Goal: Full 1:1 parity with the Hermes CLI experience via a clean dark web UI.
 > Everything you can do from the CLI terminal, you can do from this UI.
 >

@@ -161,10 +161,12 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
     if q is None:
         return
 
-    # Sprint 10: create a cancel event for this stream
-    cancel_event = threading.Event()
+    # Preserve cancellation accepted before the producer registered its flag.
     with STREAMS_LOCK:
-        CANCEL_FLAGS[stream_id] = cancel_event
+        cancel_event = CANCEL_FLAGS.get(stream_id)
+        if not isinstance(cancel_event, threading.Event):
+            cancel_event = threading.Event()
+            CANCEL_FLAGS[stream_id] = cancel_event
 
     def put(event, data):
         # If cancelled, drop all further events except the cancel event itself
@@ -177,6 +179,9 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 
     try:
         s = None
+        if cancel_event.is_set():
+            put('cancel', {'message': 'Cancelled before start'})
+            return
         try:
             s = get_session(session_id)
         except KeyError:
