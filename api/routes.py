@@ -695,6 +695,14 @@ def handle_get(handler, parsed) -> bool:
 # ── POST routes ────────────────────────────────────────────────────────────────
 
 
+def _chat_context_mode(body):
+    """Validate the explicit synchronous context opt-in before any agent work."""
+    mode = body.get("context_mode", "default")
+    if mode not in ("default", "no_files_or_memory"):
+        raise ValueError("unsupported context_mode")
+    return mode
+
+
 def handle_post(handler, parsed) -> bool:
     """Handle all POST routes. Returns True if handled, False for 404."""
     # CSRF: reject cross-origin browser requests
@@ -711,11 +719,15 @@ def handle_post(handler, parsed) -> bool:
 
     if parsed.path == "/api/session/new":
         try:
+            context_mode = _chat_context_mode(body)
             workspace = str(resolve_trusted_workspace(body.get("workspace"))) if body.get("workspace") else None
         except ValueError as e:
             return bad(handler, str(e))
         s = new_session(workspace=workspace, model=body.get("model"))
-        return j(handler, {"session": s.compact() | {"messages": s.messages}})
+        response = {"session": s.compact() | {"messages": s.messages}}
+        if context_mode != "default":
+            response["context_mode"] = context_mode
+        return j(handler, response)
 
     if parsed.path == "/api/sessions/cleanup":
         return _handle_sessions_cleanup(handler, body, zero_only=False)
@@ -1927,6 +1939,17 @@ def _handle_chat_start(handler, body):
 
 def _handle_chat_sync(handler, body):
     """Fallback synchronous chat endpoint (POST /api/chat). Not used by frontend."""
+    try:
+        context_mode = _chat_context_mode(body)
+    except ValueError as e:
+        return j(handler, {"error": str(e)}, status=400)
+    context_options = {}
+    if context_mode == "no_files_or_memory":
+        context_options = {
+            "skip_context_files": True,
+            "skip_memory": True,
+            "load_soul_identity": False,
+        }
     from api.config import _get_session_agent_lock
 
     s = get_session(body["session_id"])
@@ -1978,6 +2001,7 @@ def _handle_chat_sync(handler, body):
                 quiet_mode=True,
                 enabled_toolsets=CLI_TOOLSETS,
                 session_id=s.session_id,
+                **context_options,
             )
             workspace_ctx = f"[Workspace: {s.workspace}]\n"
             workspace_system_msg = (
@@ -1993,10 +2017,16 @@ def _handle_chat_sync(handler, body):
             )
             from api.streaming import _sanitize_messages_for_api
 
+            if context_mode == "no_files_or_memory":
+                workspace_ctx = ""
+                workspace_system_msg = None
+                history = []
+            else:
+                history = _sanitize_messages_for_api(s.messages)
             result = agent.run_conversation(
                 user_message=workspace_ctx + msg,
                 system_message=workspace_system_msg,
-                conversation_history=_sanitize_messages_for_api(s.messages),
+                conversation_history=history,
                 task_id=s.session_id,
                 persist_user_message=msg,
             )
@@ -2042,6 +2072,7 @@ def _handle_chat_sync(handler, body):
             "status": "done" if result.get("completed", True) else "partial",
             "session": s.compact() | {"messages": s.messages},
             "result": {k: v for k, v in result.items() if k != "messages"},
+            **({"context_mode": context_mode} if context_mode != "default" else {}),
         },
     )
 
